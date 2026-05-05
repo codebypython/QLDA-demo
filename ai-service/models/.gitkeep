@@ -1,0 +1,3 @@
+# Place YOLO model weights here
+# Default: yolov8n.pt (auto-downloaded by ultralytics)
+# Custom: best.pt (after fine-tuning)

@@ -1,0 +1,21 @@
+{
+  "selectedCategories": [
+    "webapp-core",
+    "backend-python",
+    "frontend-react",
+    "database",
+    "devops"
+  ],
+  "extraSkills": [
+    "django-security",
+    "django-verification"
+  ],
+  "excludeSkills": [
+    "nextjs-turbopack",
+    "nuxt4-patterns",
+    "bun-runtime",
+    "nestjs-patterns",
+    "frontend-slides",
+    "dart-flutter-patterns"
+  ]
+}
