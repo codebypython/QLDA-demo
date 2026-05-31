@@ -85,3 +85,53 @@ class TaskforceListView(APIView):
             {'id': str(u.id), 'email': u.email, 'full_name': u.full_name or u.username, 'role': u.role}
             for u in users
         ])
+
+
+from django.core.cache import cache
+from django.utils import timezone
+
+class ShareLocationView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        latitude = request.data.get('latitude')
+        longitude = request.data.get('longitude')
+        enabled = request.data.get('enabled', True)
+
+        if enabled and (latitude is None or longitude is None):
+            return Response({'error': 'Vĩ độ và kinh độ là bắt buộc'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user_id = str(request.user.id)
+        cache_key = f"user_location_{user_id}"
+
+        if enabled:
+            cache.set(cache_key, {
+                'id': user_id,
+                'latitude': float(latitude),
+                'longitude': float(longitude),
+                'name': request.user.full_name or request.user.username,
+                'role': request.user.get_role_display(),
+                'updated_at': timezone.now().isoformat(),
+            }, timeout=35)
+        else:
+            cache.delete(cache_key)
+
+        return Response({'status': 'Location updated'})
+
+
+class ActiveLocationsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        users = User.objects.filter(is_active=True)
+        active_locations = []
+
+        for u in users:
+            if u.id == request.user.id:
+                continue
+            cache_key = f"user_location_{str(u.id)}"
+            loc = cache.get(cache_key)
+            if loc:
+                active_locations.append(loc)
+
+        return Response(active_locations)

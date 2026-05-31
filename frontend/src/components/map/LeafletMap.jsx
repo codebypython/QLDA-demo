@@ -33,6 +33,25 @@ function svgIcon(color, border, shape = 'circle') {
   });
 }
 
+function userIcon(color, isPulse = false) {
+  const pulseHtml = isPulse 
+    ? `<div style="position: absolute; width: 100%; height: 100%; border-radius: 50%; background: ${color}; opacity: 0.4; animation: leaflet-pulse 2s infinite ease-out;"></div>` 
+    : '';
+  const html = `
+    <div style="position: relative; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;">
+      ${pulseHtml}
+      <div style="position: absolute; width: 14px; height: 14px; border-radius: 50%; background: ${color}; border: 2px solid white; box-shadow: 0 0 6px rgba(0,0,0,0.3); z-index: 10;"></div>
+    </div>
+  `;
+  return L.divIcon({
+    html,
+    className: 'leaflet-user-icon',
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+    popupAnchor: [0, -11],
+  });
+}
+
 function PickMarker({ pickMarker }) {
   if (!pickMarker || pickMarker.latitude == null || pickMarker.longitude == null) return null;
   const lat = +pickMarker.latitude;
@@ -58,8 +77,12 @@ function ClusterLayer({ assets, showAssets }) {
         STATUS_BORDER[a.status] || '#fff',
       );
       const m = L.marker([a.latitude, a.longitude], { icon });
+      const statusImgHtml = a.metadata?.status_image
+        ? `<img src="${a.metadata.status_image}" style="width:100%;height:100px;object-fit:cover;border-radius:4px;margin-bottom:8px;" alt="status"/>`
+        : '';
       m.bindPopup(`
-        <div style="min-width:160px">
+        <div style="min-width:160px; font-family: sans-serif;">
+          ${statusImgHtml}
           <strong>${a.name}</strong><br/>
           Loại: ${a.asset_type_display || a.asset_type}<br/>
           Trạng thái: <span style="color:${STATUS_BORDER[a.status] || '#fff'}">${a.status_display || a.status}</span>
@@ -165,10 +188,16 @@ export default function LeafletMap({
   pickMarker = null,
   /** Điểm bổ sung: [{ key, latitude, longitude, label?, color? }] */
   pointMarkers = [],
+  /** Bật chế độ admin kéo thả di chuyển vị trí tài sản */
+  enableDragAsset = false,
+  onAssetDragEnd = null,
+  currentUserPos = null,
+  nearbyUsers = [],
 }) {
   const [showAssets, setShowAssets] = useState(true);
   const [showReports, setShowReports] = useState(true);
   const [showHeat, setShowHeat] = useState(false);
+  const [showUsers, setShowUsers] = useState(true);
 
   const initialCenter = mapCenter && mapCenter.length === 2 && mapCenter[0] != null && mapCenter[1] != null
     ? [+mapCenter[0], +mapCenter[1]]
@@ -187,14 +216,86 @@ export default function LeafletMap({
           attribution='&copy; <a href="https://osm.org">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
-        <ClusterLayer assets={assets} showAssets={showAssets} />
+        {!enableDragAsset && <ClusterLayer assets={assets} showAssets={showAssets} />}
+        {enableDragAsset && showAssets && assets.map((a) => {
+          if (!a.latitude || !a.longitude) return null;
+          const icon = svgIcon(
+            ASSET_COLORS[a.asset_type] || '#3b82f6',
+            STATUS_BORDER[a.status] || '#fff',
+          );
+          return (
+            <Marker
+              key={a.id}
+              position={[a.latitude, a.longitude]}
+              icon={icon}
+              draggable={true}
+              eventHandlers={{
+                dragend: (e) => {
+                  const latLng = e.target.getLatLng();
+                  onAssetDragEnd?.(a.id, latLng.lat, latLng.lng);
+                }
+              }}
+            >
+              <Popup>
+                <div style={{ minWidth: 160, fontFamily: 'sans-serif' }}>
+                  {a.metadata?.status_image && (
+                    <img src={a.metadata.status_image} style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: 4, marginBottom: 8 }} alt="status" />
+                  )}
+                  <strong>{a.name}</strong><br />
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Kéo điểm này để di chuyển tài sản.</span>
+                  <div style={{ marginTop: 6, fontSize: 11 }}>
+                    Tọa độ mới: <strong>{a.latitude.toFixed(6)}, {a.longitude.toFixed(6)}</strong>
+                  </div>
+                </div>
+              </Popup>
+            </Marker>
+          );
+        })}
         <ReportLayer reports={reports} showReports={showReports} onSelect={onReportSelect} />
         <HeatLayer assets={assets} showHeat={showHeat} />
         <PointMarkersLayer markers={pointMarkers} />
         <PickMarker pickMarker={pickMarker} />
+
+        {showUsers && currentUserPos && (
+          <Marker position={currentUserPos} icon={userIcon('#3b82f6', true)}>
+            <Popup>
+              <div style={{ fontFamily: 'sans-serif', fontSize: 13, minWidth: 150 }}>
+                <span style={{ color: '#3b82f6', fontWeight: 'bold' }}>🔵 Vị trí của bạn</span>
+                <hr style={{ margin: '6px 0', border: 'none', borderTop: '1px solid var(--border-color)' }} />
+                <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                  Tọa độ: <strong>{currentUserPos[0].toFixed(5)}, {currentUserPos[1].toFixed(5)}</strong>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--accent-cyan)', marginTop: 4 }}>Đang kết nối GPS</div>
+              </div>
+            </Popup>
+          </Marker>
+        )}
+
+        {showUsers && nearbyUsers && nearbyUsers.map((nu) => (
+          <Marker key={nu.id} position={[nu.latitude, nu.longitude]} icon={userIcon('#ef4444', false)}>
+            <Popup>
+              <div style={{ fontFamily: 'sans-serif', fontSize: 13, minWidth: 160 }}>
+                <span style={{ color: '#ef4444', fontWeight: 'bold' }}>🔴 {nu.name}</span>
+                <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', marginTop: 2 }}>{nu.role}</div>
+                <hr style={{ margin: '6px 0', border: 'none', borderTop: '1px solid var(--border-color)' }} />
+                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  Trạng thái: <span style={{ color: '#22c55e', fontWeight: 600 }}>Hoạt động</span>
+                </div>
+              </div>
+            </Popup>
+          </Marker>
+        ))}
+
         {onCoordPick && <ClickToCoord onClick={onCoordPick} />}
         {onBboxChange && <MoveBboxEmitter onBboxChange={onBboxChange} />}
       </MapContainer>
+
+      <style>{`
+        @keyframes leaflet-pulse {
+          0% { transform: scale(0.6); opacity: 0.9; }
+          100% { transform: scale(2.4); opacity: 0; }
+        }
+      `}</style>
 
       {showLayerControls && (
       <div className="map-controls" style={{
@@ -208,6 +309,9 @@ export default function LeafletMap({
         </label>
         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={showReports} onChange={(e) => setShowReports(e.target.checked)} /> Sự cố
+        </label>
+        <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          <input type="checkbox" checked={showUsers} onChange={(e) => setShowUsers(e.target.checked)} /> Người dùng
         </label>
         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={showHeat} onChange={(e) => setShowHeat(e.target.checked)} /> Heatmap

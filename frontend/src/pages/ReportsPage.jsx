@@ -77,18 +77,22 @@ export default function ReportsPage() {
     try {
       const { data } = await aiAPI.classify(file);
       setAiResult(data);
-      const threshold = settings.ai_confidence_threshold ?? 0.5;
       if (data.primary_class && data.primary_class !== 'unknown') {
-        if (data.confidence >= threshold) {
-          setForm((f) => ({ ...f, incident_type: data.primary_class }));
-          toast.success(`AI: ${data.primary_class} (${(data.confidence * 100).toFixed(0)}%)`);
-        } else {
-          setPendingClassify(data);
-        }
+        toast.success(`AI phân tích ảnh thành công!`);
       }
     } catch (err) {
+      setImageFile(null);
       toast.error('AI service không khả dụng: ' + getErrorMessage(err));
     }
+  };
+
+  const applyAiResult = () => {
+    if (!aiResult?.primary_class || aiResult.primary_class === 'unknown') {
+      toast.error('Không có kết quả phân loại AI hợp lệ.');
+      return;
+    }
+    setForm((f) => ({ ...f, incident_type: aiResult.primary_class }));
+    toast.success(`Đã cập nhật loại sự cố từ AI: ${aiResult.primary_class}`);
   };
 
   const handleCreate = async (e) => {
@@ -199,23 +203,19 @@ export default function ReportsPage() {
               <label className="form-label">Hình ảnh (AI sẽ tự phân loại)</label>
               <input type="file" accept="image/*" onChange={handleImageChange} className="form-input" />
               {aiResult && (
-                <div style={{ marginTop: 8, fontSize: 12, color: 'var(--accent-cyan)' }}>
-                  AI: {aiResult.primary_class} ({(aiResult.confidence * 100).toFixed(0)}% confidence)
-                  {aiResult.mock && ' [mock mode]'}
-                </div>
-              )}
-              {pendingClassify && (
-                <div style={{ marginTop: 8, padding: 10, background: 'rgba(245,158,11,0.1)', borderRadius: 'var(--radius-sm)' }}>
-                  <p style={{ fontSize: 13, marginBottom: 6 }}>
-                    AI confidence thấp ({(pendingClassify.confidence * 100).toFixed(0)}%).
-                    Có thể là <strong>{pendingClassify.primary_class}</strong>?
-                  </p>
-                  <button type="button" className="btn btn-sm btn-primary" onClick={() => {
-                    setForm((f) => ({ ...f, incident_type: pendingClassify.primary_class }));
-                    setPendingClassify(null);
-                  }}>Đồng ý</button>
-                  <button type="button" className="btn btn-sm btn-secondary" style={{ marginLeft: 6 }}
-                    onClick={() => setPendingClassify(null)}>Bỏ qua</button>
+                <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: 12, color: 'var(--accent-cyan)' }}>
+                    AI phân tích: <strong>{aiResult.primary_class}</strong> ({(aiResult.confidence * 100).toFixed(0)}% tin cậy)
+                    {aiResult.mock && ' [mô phỏng]'}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    onClick={applyAiResult}
+                    style={{ padding: '4px 8px', fontSize: 11 }}
+                  >
+                    Dùng AI tự cập nhật form
+                  </button>
                 </div>
               )}
             </div>

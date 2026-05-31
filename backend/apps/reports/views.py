@@ -15,6 +15,26 @@ from apps.users.permissions import ReportPermission
 from apps.audit.models import ActivityLog
 
 USE_POSTGIS = os.environ.get('USE_POSTGIS', 'false').lower() == 'true'
+import math
+from apps.assets.models import Asset
+
+def find_nearest_asset(lat, lng):
+    assets = Asset.objects.all()
+    nearest = None
+    min_dist = float('inf')
+    for a in assets:
+        a_lat = a.latitude
+        a_lng = a.longitude
+        if a_lat is None or a_lng is None:
+            continue
+        dist = math.sqrt((a_lat - lat)**2 + (a_lng - lng)**2)
+        if dist < min_dist:
+            min_dist = dist
+            nearest = a
+    # Roughly within 1.2km
+    if min_dist < 0.012:
+        return nearest
+    return None
 
 
 class ReportViewSet(viewsets.ModelViewSet):
@@ -98,15 +118,34 @@ class ReportViewSet(viewsets.ModelViewSet):
             if assigned_user_id:
                 from apps.users.models import User
                 assigned_user = User.objects.filter(id=assigned_user_id, role='taskforce').first()
+            
+            # Link asset (from request or search nearest)
+            related_asset_id = request.data.get('asset')
+            asset = None
+            if related_asset_id:
+                asset = Asset.objects.filter(id=related_asset_id).first()
+            elif report.latitude is not None and report.longitude is not None:
+                asset = find_nearest_asset(report.latitude, report.longitude)
+                
             task = Task.objects.create(
                 title=f"Xử lý: {report.get_incident_type_display()}",
                 description=report.description or '',
                 report=report,
+                related_asset=asset,
                 assigned_to=assigned_user,
                 created_by=request.user,
                 priority=priority_map.get(report.severity, 'medium'),
                 status='assigned' if assigned_user else 'open',
             )
+            
+            # Update asset status & image dynamically (Citizen reports damage)
+            if asset and report.image:
+                if not asset.metadata:
+                    asset.metadata = {}
+                asset.metadata['status_image'] = report.image.url
+                asset.status = 'damaged'
+                asset.save(update_fields=['metadata', 'status'])
+                
             if assigned_user:
                 Notification.notify(
                     recipient=assigned_user,
@@ -143,9 +182,17 @@ class ReportViewSet(viewsets.ModelViewSet):
                     notes=f'Tự động tạo từ report #{str(report.id)[:8]}',
                 )
                 asset.last_maintained_at = timezone.now().date()
+                if not asset.metadata:
+                    asset.metadata = {}
+                
+                # Fetch task completion image (Taskforce repairs asset)
+                comp_task = report.tasks.filter(related_asset=asset, completion_image__isnull=False).first()
+                if comp_task and comp_task.completion_image:
+                    asset.metadata['status_image'] = comp_task.completion_image.url
+                
                 if asset.status in ('damaged', 'maintenance'):
                     asset.status = 'active'
-                asset.save()
+                asset.save(update_fields=['last_maintained_at', 'status', 'metadata'])
             if report.reporter:
                 Notification.notify(
                     recipient=report.reporter,

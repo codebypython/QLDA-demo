@@ -12,6 +12,7 @@ import ReportDetailPage from './pages/ReportDetailPage';
 import TasksPage from './pages/TasksPage';
 import MaintenancePage from './pages/MaintenancePage';
 import AnalyticsPage from './pages/AnalyticsPage';
+import MonitorsPage from './pages/MonitorsPage';
 import UsersAdminPage from './pages/admin/UsersAdminPage';
 import ActivityPage from './pages/admin/ActivityPage';
 import SettingsPage from './pages/admin/SettingsPage';
@@ -70,6 +71,9 @@ export default function App() {
                   } />
                   <Route path="/maintenance" element={
                     <ProtectedRoute allow={['operator', 'taskforce', 'admin']}><MaintenancePage /></ProtectedRoute>
+                  } />
+                  <Route path="/monitors" element={
+                    <ProtectedRoute allow={['operator', 'admin']}><MonitorsPage /></ProtectedRoute>
                   } />
                   <Route path="/analytics" element={
                     <ProtectedRoute allow={['operator', 'admin']}><AnalyticsPage /></ProtectedRoute>

@@ -4,7 +4,8 @@ import { useAssetsStore } from '../store';
 import { assetsAPI, getErrorMessage } from '../services/api';
 import LocationPickerModal from '../components/map/LocationPickerModal';
 import ConfirmActionModal from '../components/common/ConfirmActionModal';
-import { Plus, Trash2, Edit, MapPin, ExternalLink } from 'lucide-react';
+import LeafletMap from '../components/map/LeafletMap';
+import { Plus, Trash2, Edit, MapPin, ExternalLink, Map, Check, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const DEFAULT_LAT = 16.0678;
@@ -26,6 +27,51 @@ export default function AssetsPage() {
   const [pickEditOpen, setPickEditOpen] = useState(false);
   const [mapCtx, setMapCtx] = useState([]);
   const [deleteId, setDeleteId] = useState(null);
+  const [isDragMode, setIsDragMode] = useState(false);
+  const [draggedAssets, setDraggedAssets] = useState({});
+
+  const tempAssets = assets.map(a => {
+    if (draggedAssets[a.id]) {
+      return {
+        ...a,
+        latitude: draggedAssets[a.id].latitude,
+        longitude: draggedAssets[a.id].longitude,
+      };
+    }
+    return a;
+  });
+
+  const handleAssetDragEnd = (assetId, newLat, newLng) => {
+    setDraggedAssets(prev => ({
+      ...prev,
+      [assetId]: { latitude: newLat, longitude: newLng },
+    }));
+  };
+
+  const handleSaveDragPositions = async () => {
+    const ids = Object.keys(draggedAssets);
+    if (ids.length === 0) return;
+    const loadToast = toast.loading('Đang lưu tọa độ mới...');
+    try {
+      await Promise.all(
+        ids.map(id => {
+          const coords = draggedAssets[id];
+          return assetsAPI.update(id, coords);
+        })
+      );
+      toast.success('Đã lưu tọa độ mới thành công!', { id: loadToast });
+      setDraggedAssets({});
+      setIsDragMode(false);
+      fetchAssets();
+    } catch (err) {
+      toast.error('Lỗi khi lưu vị trí: ' + getErrorMessage(err), { id: loadToast });
+    }
+  };
+
+  const handleCancelDrag = () => {
+    setDraggedAssets({});
+    setIsDragMode(false);
+  };
 
   useEffect(() => { fetchAssets(); }, []);
 
@@ -105,10 +151,80 @@ export default function AssetsPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <h3 style={{ fontSize: 18, fontWeight: 700 }}>Danh sách tài sản ({assets.length})</h3>
-        <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>
-          <Plus size={16} /> Thêm tài sản
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button 
+            className={`btn ${isDragMode ? 'btn-primary' : 'btn-secondary'}`} 
+            onClick={() => {
+              if (isDragMode) {
+                handleCancelDrag();
+              } else {
+                setIsDragMode(true);
+              }
+            }}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, borderColor: 'var(--accent-cyan)' }}
+          >
+            <Map size={16} /> {isDragMode ? 'Tắt chế độ bản đồ' : 'Kéo thả sửa vị trí'}
+          </button>
+          <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>
+            <Plus size={16} /> Thêm tài sản
+          </button>
+        </div>
       </div>
+
+      {isDragMode && (
+        <div className="card" style={{ marginBottom: 20, border: '1px solid var(--accent-cyan)', background: 'var(--bg-glass)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 12 }}>
+            <div>
+              <h4 className="card-title" style={{ margin: 0, color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Map size={18} /> Chế độ kéo thả vị trí tài sản
+              </h4>
+              <p style={{ margin: '4px 0 0 0', fontSize: 13, color: 'var(--text-secondary)' }}>
+                Kéo thả các Marker tài sản trên bản đồ bên dưới để thay đổi tọa độ.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button 
+                className="btn btn-primary" 
+                onClick={handleSaveDragPositions}
+                disabled={Object.keys(draggedAssets).length === 0}
+                style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+              >
+                <Check size={14} /> Lưu ({Object.keys(draggedAssets).length}) vị trí
+              </button>
+              <button 
+                className="btn btn-secondary" 
+                onClick={handleCancelDrag}
+                style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+              >
+                <X size={14} /> Hủy bỏ
+              </button>
+            </div>
+          </div>
+          
+          {Object.keys(draggedAssets).length > 0 && (
+            <div style={{
+              background: 'rgba(59, 130, 246, 0.1)',
+              border: '1px dashed #3b82f6',
+              padding: '8px 12px',
+              borderRadius: 'var(--radius-sm)',
+              marginBottom: 12,
+              fontSize: 13,
+              color: 'var(--text-primary)'
+            }}>
+              💡 Đang có <strong>{Object.keys(draggedAssets).length}</strong> tài sản tạm thời di chuyển vị trí. Vui lòng bấm <strong>"Lưu vị trí"</strong> để lưu thay đổi vào cơ sở dữ liệu.
+            </div>
+          )}
+
+          <div style={{ height: 450, borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+            <LeafletMap
+              assets={tempAssets}
+              enableDragAsset={true}
+              onAssetDragEnd={handleAssetDragEnd}
+              showLayerControls={false}
+            />
+          </div>
+        </div>
+      )}
 
       <LocationPickerModal
         open={pickCreateOpen}
@@ -248,8 +364,11 @@ export default function AssetsPage() {
                   <td style={{ fontWeight: 500 }}>{a.name}</td>
                   <td><span className="badge badge-blue">{a.asset_type_display || a.asset_type}</span></td>
                   <td><span className={`badge ${STATUS_BADGE[a.status] || 'badge-blue'}`}>{a.status_display || a.status}</span></td>
-                  <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>
-                    {a.latitude?.toFixed(4)}, {a.longitude?.toFixed(4)}
+                  <td style={{ color: draggedAssets[a.id] ? 'var(--accent-cyan)' : 'var(--text-muted)', fontSize: 12, fontWeight: draggedAssets[a.id] ? '600' : 'normal' }}>
+                    {draggedAssets[a.id] 
+                      ? `${draggedAssets[a.id].latitude.toFixed(4)}*, ${draggedAssets[a.id].longitude.toFixed(4)}* (Mới)`
+                      : `${a.latitude?.toFixed(4)}, ${a.longitude?.toFixed(4)}`
+                    }
                     {' '}
                     <Link to={`/map?asset=${a.id}`} style={{ color: 'var(--accent-cyan)', marginLeft: 6 }}>Map</Link>
                   </td>

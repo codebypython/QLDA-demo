@@ -76,6 +76,9 @@ export const authAPI = {
   },
   changePassword: (old_password, new_password) =>
     api.post('/auth/change_password/', { old_password, new_password }),
+  shareLocation: (latitude, longitude, enabled = true) =>
+    api.post('/auth/share_location/', { latitude, longitude, enabled }),
+  getActiveLocations: () => api.get('/auth/active_locations/'),
 };
 
 export const usersAPI = {
