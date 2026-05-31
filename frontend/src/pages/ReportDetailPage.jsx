@@ -356,25 +356,26 @@ export default function ReportDetailPage() {
             {timeline.length === 0 && (
               <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>Chưa có hoạt động</p>
             )}
-            {timeline.map((t) => (
-              <div key={t.id} style={{ position: 'relative', marginBottom: 12 }}>
-                <div style={{
-                  position: 'absolute', left: -16, top: 4, width: 10, height: 10,
-                  borderRadius: '50%', background: 'var(--accent-cyan)',
-                }} />
-                <div style={{ fontWeight: 600, fontSize: 13 }}>{t.verb}</div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                  {t.actor_name || t.actor_email || 'Hệ thống'} • {new Date(t.created_at).toLocaleString('vi')}
-                </div>
-                {t.details && Object.keys(t.details).length > 0 && (
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
-                    {Object.entries(t.details).map(([k, v]) => (
-                      <span key={k}>{k}: {String(v)}; </span>
-                    ))}
+            {timeline.map((t) => {
+              const friendlyDetails = translateTimelineDetails(t.details);
+              return (
+                <div key={t.id} style={{ position: 'relative', marginBottom: 12 }}>
+                  <div style={{
+                    position: 'absolute', left: -16, top: 4, width: 10, height: 10,
+                    borderRadius: '50%', background: 'var(--accent-cyan)',
+                  }} />
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{translateTimelineVerb(t.verb)}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                    {t.actor_name || t.actor_email || 'Hệ thống'} • {new Date(t.created_at).toLocaleString('vi')}
                   </div>
-                )}
-              </div>
-            ))}
+                  {friendlyDetails && (
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
+                      {friendlyDetails}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -422,3 +423,61 @@ export default function ReportDetailPage() {
     </div>
   );
 }
+
+// Timeline Vietnamese translation helpers
+const translateTimelineVerb = (verb) => {
+  const map = {
+    'created': 'Đã tạo báo cáo sự cố',
+    'assigned': 'Đã phân công xử lý sửa chữa',
+    'started': 'Đã bắt đầu thực hiện sửa chữa',
+    'in_progress': 'Đang tiến hành sửa chữa',
+    'completed': 'Đã sửa chữa hoàn thành',
+    'resolved': 'Đã xác nhận giải quyết báo cáo',
+    'rejected': 'Đã từ chối báo cáo',
+    'report.status_changed': 'Đã cập nhật trạng thái báo cáo',
+  };
+  return map[verb] || verb;
+};
+
+const translateTimelineDetails = (details) => {
+  if (!details || typeof details !== 'object' || Object.keys(details).length === 0) return null;
+  
+  const keyMap = {
+    'from': 'Trạng thái cũ',
+    'to': 'Trạng thái mới',
+    'reason': 'Lý do',
+    'assigned_to': 'Người đảm nhận',
+    'priority': 'Độ ưu tiên',
+    'title': 'Tiêu đề',
+    'description': 'Mô tả',
+    'notes': 'Ghi chú',
+  };
+  
+  const statusMap = {
+    'pending': 'Chờ duyệt',
+    'assigned': 'Đã giao việc',
+    'in_progress': 'Đang xử lý',
+    'resolved': 'Đã giải quyết',
+    'rejected': 'Từ chối',
+  };
+  
+  const priorityMap = {
+    'low': 'Thấp',
+    'medium': 'Trung bình',
+    'high': 'Cao',
+    'urgent': 'Khẩn cấp',
+  };
+
+  const parts = [];
+  Object.entries(details).forEach(([key, val]) => {
+    if (val === null || val === undefined || val === '') return;
+    const cleanKey = keyMap[key] || key;
+    let cleanVal = String(val);
+    if (key === 'from' || key === 'to') cleanVal = statusMap[val] || cleanVal;
+    if (key === 'priority') cleanVal = priorityMap[val] || cleanVal;
+    parts.push(`${cleanKey}: "${cleanVal}"`);
+  });
+  
+  return parts.length > 0 ? parts.join(' • ') : null;
+};
+
