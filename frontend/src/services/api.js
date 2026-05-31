@@ -212,18 +212,38 @@ export const aiAPI = {
   health: () => axios.get(`${AI_API_URL}/health`),
 };
 
-export const getErrorMessage = (error, defaultMsg = 'Đã có lỗi xảy ra') => {
+export const getErrorMessage = (error, defaultMsg = 'Yêu cầu không thể thực hiện') => {
   if (error.response?.data) {
     const data = error.response.data;
     if (typeof data === 'object') {
       if (data.detail) return data.detail;
       if (data.message) return data.message;
-      // Flatten array or single fields validation errors
+
+      const keyMap = {
+        username: 'Tên tài khoản',
+        email: 'Địa chỉ email',
+        password: 'Mật khẩu',
+        non_field_errors: 'Thông báo',
+        incident_type: 'Loại sự cố',
+        severity: 'Mức độ nghiêm trọng',
+        latitude: 'Vĩ độ',
+        longitude: 'Kinh độ',
+        asset: 'Tài sản',
+        assigned_to: 'Người được phân công',
+        status: 'Trạng thái',
+      };
+
       return Object.entries(data)
         .map(([key, val]) => {
-          const label = key === 'non_field_errors' ? '' : `${key}: `;
+          const cleanKey = keyMap[key] || 'Dữ liệu';
           const detail = Array.isArray(val) ? val.join(', ') : String(val);
-          return `${label}${detail}`;
+          let cleanDetail = detail;
+          if (detail.includes('This field')) {
+            cleanDetail = 'không được bỏ trống';
+          } else if (detail.includes('Invalid')) {
+            cleanDetail = 'giá trị không hợp lệ';
+          }
+          return `${cleanKey} ${cleanDetail}`;
         })
         .join('; ');
     }
@@ -231,7 +251,12 @@ export const getErrorMessage = (error, defaultMsg = 'Đã có lỗi xảy ra') =
       return data;
     }
   }
-  return error.message || defaultMsg;
+
+  if (error.message === 'Network Error') {
+    return 'Lỗi kết nối máy chủ. Vui lòng kiểm tra đường truyền.';
+  }
+
+  return defaultMsg;
 };
 
 export default api;

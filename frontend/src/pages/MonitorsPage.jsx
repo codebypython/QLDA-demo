@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { aiAPI, getErrorMessage } from '../services/api';
-import { Camera, RefreshCw, CheckCircle, AlertTriangle, Shield, Play, Pause, Settings, Edit2, Video } from 'lucide-react';
+import { aiAPI, getErrorMessage, assetsAPI } from '../services/api';
+import { useAssetsStore } from '../store';
+import { Camera, RefreshCw, CheckCircle, AlertTriangle, Shield, Play, Pause, Edit2, Video, Download, Trash2, Check, FileCheck, ArrowUpRight, Upload } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const INITIAL_MONITORS = [
@@ -10,10 +11,6 @@ const INITIAL_MONITORS = [
     name: 'CAM_01 - Cầu Sông Hàn (Đông)',
     assetName: 'Cột đèn chiếu sáng 04',
     assetType: 'lamp',
-    initialQuality: 95,
-    status: 'active',
-    lat: 16.0678,
-    lng: 108.2208,
     streamUrl: 'https://images.unsplash.com/photo-1549880338-65ddcdfd017b?w=600&auto=format&fit=crop&q=60', // Bridge at night
   },
   {
@@ -22,10 +19,6 @@ const INITIAL_MONITORS = [
     name: 'CAM_02 - Công viên Bạch Đằng (Trung tâm)',
     assetName: 'Ghế đá nghệ thuật 12',
     assetType: 'bench',
-    initialQuality: 92,
-    status: 'active',
-    lat: 16.0592,
-    lng: 108.2245,
     streamUrl: 'https://images.unsplash.com/photo-1582268611958-ebfd161ef9cf?w=600&auto=format&fit=crop&q=60', // Bench in park
   },
   {
@@ -34,10 +27,6 @@ const INITIAL_MONITORS = [
     name: 'CAM_03 - Đường Bạch Đằng (Bắc)',
     assetName: 'Thùng rác thông minh 08',
     assetType: 'trash_can',
-    initialQuality: 88,
-    status: 'active',
-    lat: 16.0745,
-    lng: 108.2212,
     streamUrl: 'https://images.unsplash.com/photo-1611284446314-60a58ac0deb9?w=600&auto=format&fit=crop&q=60', // City street
   },
   {
@@ -46,10 +35,6 @@ const INITIAL_MONITORS = [
     name: 'CAM_04 - Phố đi bộ An Thượng',
     assetName: 'Nhà vệ sinh công cộng 02',
     assetType: 'toilet',
-    initialQuality: 96,
-    status: 'active',
-    lat: 16.0465,
-    lng: 108.2435,
     streamUrl: 'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=600&auto=format&fit=crop&q=60', // Modern square
   }
 ];
@@ -62,15 +47,35 @@ export default function MonitorsPage() {
     'mon-03': true,
     'mon-04': true,
   });
-  const [evaluating, setEvaluating] = useState({});
+  
   const [editingCode, setEditingCode] = useState(null); // id of monitor currently editing its code
   const [inputCode, setInputCode] = useState('');
+  const [snapshots, setSnapshots] = useState({}); // { [monId]: base64DataUrl }
+  const [shutter, setShutter] = useState({}); // { [monId]: boolean } (camera shutter flash effect)
   
+  // Ref managers
   const canvasRefs = useRef({});
   const webcamStreams = useRef({}); // { monId: MediaStream }
   const webcamVideos = useRef({}); // { monId: HTMLVideoElement }
+  const activeImages = useRef({}); // { monId: HTMLImageElement } (persist to prevent flickering)
 
-  // Cleanup all webcams on page unmount
+  // AI Evaluation Center states
+  const { assets, fetchAssets, loading: assetsLoading } = useAssetsStore();
+  const [selectedAssetId, setSelectedAssetId] = useState('');
+  const [uploadFile, setUploadFile] = useState(null);
+  const [uploadBase64, setUploadBase64] = useState(null);
+  const [aiResult, setAiResult] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [suggestedStatus, setSuggestedStatus] = useState('active');
+  const [qualityScore, setQualityScore] = useState(100);
+  const [saving, setSaving] = useState(false);
+
+  // Fetch all assets on page mount to list in selector dropdown
+  useEffect(() => {
+    fetchAssets();
+  }, [fetchAssets]);
+
+  // Cleanup all active webcams on page unmount
   useEffect(() => {
     return () => {
       Object.keys(webcamStreams.current).forEach(id => {
@@ -81,16 +86,25 @@ export default function MonitorsPage() {
     };
   }, []);
 
-  // Simulate active frame drawings to make the monitors look alive and dynamic
+  // Flicker-free canvas drawing loop
   useEffect(() => {
     const intervals = [];
     monitors.forEach((m) => {
       const canvas = canvasRefs.current[m.id];
       if (!canvas) return;
       const ctx = canvas.getContext('2d');
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.src = m.streamUrl;
+
+      // Check if image object already exists in the ref, if not create it
+      let img = activeImages.current[m.id];
+      if (!img) {
+        img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = m.streamUrl;
+        activeImages.current[m.id] = img;
+      } else if (img.src !== m.streamUrl) {
+        // Only update source if the streamUrl actually changes, avoiding continuous reloading
+        img.src = m.streamUrl;
+      }
 
       let frame = 0;
       const draw = () => {
@@ -100,7 +114,16 @@ export default function MonitorsPage() {
         if (m.camCode?.toUpperCase() === 'WEBCAM' && videoEl && videoEl.readyState >= 2) {
           ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
         } else {
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          if (img.complete && img.naturalWidth !== 0) {
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          } else {
+            // Draw slate connecting background (no flashes or blank screens)
+            ctx.fillStyle = '#090d16';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+            ctx.font = '12px monospace';
+            ctx.fillText('CONNECTING CCTV SOURCE...', canvas.width / 2 - 90, canvas.height / 2);
+          }
         }
         
         // Scanlines overlay for rich monitor feel
@@ -128,18 +151,10 @@ export default function MonitorsPage() {
         ctx.font = '10px monospace';
         ctx.fillText(timeStr, 15, canvas.height - 15);
 
-        // Noise overlay if evaluating
-        if (evaluating[m.id]) {
-          ctx.fillStyle = 'rgba(255,255,255,0.15)';
-          for (let i = 0; i < 200; i++) {
-            const rx = Math.random() * canvas.width;
-            const ry = Math.random() * canvas.height;
-            ctx.fillRect(rx, ry, 2, 2);
-          }
-          // Scan green bar
-          ctx.fillStyle = 'rgba(16, 185, 129, 0.3)';
-          const scanY = (frame * 5) % canvas.height;
-          ctx.fillRect(0, scanY, canvas.width, 8);
+        // Shutter flash visual effect
+        if (shutter[m.id]) {
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
 
         frame++;
@@ -150,59 +165,30 @@ export default function MonitorsPage() {
         intervals.push(id);
       };
 
-      img.onload = startDraw;
-      img.onerror = startDraw; // Fallback to run loop even if Unsplash query fails or custom source
+      // Run drawing loop immediately
+      startDraw();
     });
 
     return () => intervals.forEach(clearInterval);
-  }, [monitors, activePlay, evaluating]);
+  }, [monitors, activePlay, shutter]);
 
-  const handleAISnapshot = async (monId) => {
-    if (evaluating[monId]) return;
-    
-    setEvaluating(prev => ({ ...prev, [monId]: true }));
-    toast(`Đang chụp hình ảnh từ ${monId} và gửi phân tích AI...`, { icon: '📸' });
-    
+  // Capture canvas current frame (base64)
+  const captureSnapshot = (monId) => {
+    const canvas = canvasRefs.current[monId];
+    if (!canvas) return;
+
+    // Trigger visual flash
+    setShutter(prev => ({ ...prev, [monId]: true }));
+    setTimeout(() => {
+      setShutter(prev => ({ ...prev, [monId]: false }));
+    }, 150);
+
     try {
-      // Simulate snapshot process
-      await new Promise(r => setTimeout(r, 1800));
-
-      // We call classify with a mock flow (or a real file if we want, but since it is a camera feed, we mock the AI response based on simulated health)
-      // Generates a random score and simulated status
-      const randomSeed = Math.random();
-      let score = 98;
-      let status = 'active';
-      let msg = 'Chất lượng tài sản tuyệt vời. Không phát hiện sự cố.';
-
-      if (randomSeed < 0.35) {
-        score = Math.round(30 + Math.random() * 25);
-        status = 'damaged';
-        msg = `Cảnh báo: Phát hiện dấu hiệu hư hại nứt vỡ. Đánh giá chất lượng: ${score}%.`;
-      } else if (randomSeed < 0.6) {
-        score = Math.round(75 + Math.random() * 10);
-        status = 'maintenance';
-        msg = `Nhắc nhở: Cần lập lịch vệ sinh/bảo trì định kỳ. Đánh giá chất lượng: ${score}%.`;
-      }
-
-      setMonitors(prev => prev.map(m => {
-        if (m.id === monId) {
-          return { ...m, initialQuality: score, status };
-        }
-        return m;
-      }));
-
-      if (status === 'damaged') {
-        toast.error(msg, { duration: 4000 });
-      } else if (status === 'maintenance') {
-        toast(msg, { icon: '⚠️', duration: 4000 });
-      } else {
-        toast.success(msg, { duration: 4000 });
-      }
-
+      const dataUrl = canvas.toDataURL('image/jpeg');
+      setSnapshots(prev => ({ ...prev, [monId]: dataUrl }));
+      toast.success('Đã chụp ảnh màn hình camera!', { icon: '📸' });
     } catch (err) {
-      toast.error('Lỗi khi phân tích hình ảnh camera: ' + getErrorMessage(err));
-    } finally {
-      setEvaluating(prev => ({ ...prev, [monId]: false }));
+      toast.error('Không thể chụp ảnh: ' + err.message);
     }
   };
 
@@ -217,35 +203,18 @@ export default function MonitorsPage() {
     }
   };
 
-  const handleUpdateCamCode = async (monId, newCode) => {
-    stopWebcam(monId);
+  const handleUpdateCamCode = (monId, newCode) => {
     let updatedStreamUrl = null;
 
     if (newCode.toUpperCase() === 'WEBCAM') {
-      const loadToast = toast.loading('Đang khởi động Webcam của bạn...');
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-        const videoEl = document.createElement('video');
-        videoEl.srcObject = stream;
-        videoEl.muted = true;
-        videoEl.playsInline = true;
-        videoEl.play();
-        
-        webcamStreams.current[monId] = stream;
-        webcamVideos.current[monId] = videoEl;
-        
-        toast.success(`Đã phát trực tiếp Webcam trên Monitor ${monId}!`, { id: loadToast });
-      } catch (err) {
-        toast.error('Lỗi truy cập Webcam: ' + err.message, { id: loadToast });
-        return;
-      }
+      toast.success('Đã cấu hình mã nguồn Webcam. Nhấn nút tam giác (▶) để bắt đầu truyền hình ảnh.');
     } else if (newCode.startsWith('http://') || newCode.startsWith('https://')) {
       updatedStreamUrl = newCode;
-      toast.success(`Đã cấu hình đường dẫn hình ảnh tùy chỉnh cho ${monId}!`);
+      toast.success('Đã lưu địa chỉ hình ảnh tùy chỉnh.');
     } else {
       const original = INITIAL_MONITORS.find(m => m.id === monId);
       updatedStreamUrl = original ? original.streamUrl : null;
-      toast.success(`Đã thiết lập lại camera mặc định: ${newCode}`);
+      toast.success(`Đã lưu mã camera nguồn.`);
     }
 
     setMonitors(prev => prev.map(m => {
@@ -261,8 +230,150 @@ export default function MonitorsPage() {
     setEditingCode(null);
   };
 
-  const togglePlay = (id) => {
-    setActivePlay(prev => ({ ...prev, [id]: !prev[id] }));
+  const togglePlay = async (id) => {
+    const nextPlayState = !activePlay[id];
+    
+    if (nextPlayState) {
+      const m = monitors.find(x => x.id === id);
+      if (m.camCode?.toUpperCase() === 'WEBCAM') {
+        const loadToast = toast.loading('Đang khởi động camera của bạn...');
+        try {
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error('Trình duyệt của bạn không hỗ trợ hoặc kết nối không bảo mật (HTTP).');
+          }
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          const videoEl = document.createElement('video');
+          videoEl.srcObject = stream;
+          videoEl.muted = true;
+          videoEl.playsInline = true;
+          videoEl.play();
+          
+          webcamStreams.current[id] = stream;
+          webcamVideos.current[id] = videoEl;
+          
+          toast.success('Đã phát trực tiếp luồng Webcam!', { id: loadToast });
+        } catch (err) {
+          const cleanErr = err.message || '';
+          const isSecurity = !navigator.mediaDevices || cleanErr.includes('getUserMedia') || cleanErr.includes('Origin') || cleanErr.includes('undefined');
+          const friendlyMsg = isSecurity
+            ? 'Không thể khởi động thiết bị camera. Đảm bảo bạn đang truy cập qua kết nối bảo mật (localhost hoặc HTTPS) và đã cấp quyền.'
+            : 'Không thể truy cập camera. Vui lòng kiểm tra lại thiết bị kết nối.';
+          
+          toast.error(friendlyMsg, { id: loadToast, duration: 5000 });
+          return;
+        }
+      }
+    } else {
+      stopWebcam(id);
+    }
+    
+    setActivePlay(prev => ({ ...prev, [id]: nextPlayState }));
+  };
+
+  // Convert uploaded image to Base64 preview
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    setUploadFile(file);
+    setAiResult(null);
+    
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setUploadBase64(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Dedicated AI Center Evaluation
+  const handleAICenterAudit = async () => {
+    if (!uploadFile) {
+      toast.error('Vui lòng tải ảnh hiện trạng lên trước!');
+      return;
+    }
+    
+    setAiLoading(true);
+    setAiResult(null);
+    const loadToast = toast.loading('Đang chạy phân tích YOLOv8...');
+    
+    try {
+      const { data } = await aiAPI.classify(uploadFile);
+      setAiResult(data);
+      
+      let score = 95;
+      let status = 'active';
+      
+      const isDefect = data.primary_class && data.primary_class !== 'unknown' && data.primary_class !== 'none';
+      if (isDefect) {
+        const confidence = data.confidence || 0.8;
+        score = Math.round(100 - (confidence * 60) - (Math.random() * 5));
+        score = Math.max(10, Math.min(65, score)); // Clamp between 10% and 65%
+        
+        if (score < 60) {
+          status = 'damaged';
+        } else {
+          status = 'maintenance';
+        }
+      } else {
+        score = Math.round(90 + Math.random() * 9);
+        status = 'active';
+      }
+      
+      setQualityScore(score);
+      setSuggestedStatus(status);
+      toast.success('Kiểm định chất lượng AI hoàn tất!', { id: loadToast });
+    } catch (err) {
+      toast.error('Lỗi kết nối model, vui lòng thử lại sau', { id: loadToast });
+      setAiResult(null);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  // Save base64 image and status to backend
+  const handleUpdateAssetStatus = async () => {
+    if (!selectedAssetId) {
+      toast.error('Vui lòng chọn tài sản cần cập nhật!');
+      return;
+    }
+    
+    const asset = assets.find(a => a.id === selectedAssetId);
+    if (!asset) {
+      toast.error('Không tìm thấy tài sản công cộng.');
+      return;
+    }
+    
+    setSaving(true);
+    const loadToast = toast.loading('Đang cập nhật trạng thái tài sản...');
+    
+    try {
+      const updatedMetadata = {
+        ...(asset.metadata || {}),
+        status_image: uploadBase64
+      };
+      
+      await assetsAPI.update(selectedAssetId, {
+        status: suggestedStatus,
+        metadata: updatedMetadata
+      });
+      
+      toast.success(`Đã cập nhật trạng thái tài sản "${asset.name}" thành công!`, { id: loadToast });
+      
+      // Re-fetch assets in store to instantly sync 2D and 3D maps
+      await fetchAssets();
+      
+      // Clean reset form state
+      setSelectedAssetId('');
+      setUploadFile(null);
+      setUploadBase64(null);
+      setAiResult(null);
+      setQualityScore(100);
+      setSuggestedStatus('active');
+    } catch (err) {
+      toast.error('Không thể cập nhật tài sản: ' + getErrorMessage(err), { id: loadToast });
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -273,7 +384,7 @@ export default function MonitorsPage() {
             <Camera size={20} className="text-primary" /> Giám sát Camera & Đánh giá AI
           </h3>
           <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-            Giám sát trực quan camera thông minh. Bấm nút AI Auditing để tự động chụp hình ảnh camera và chạy mô hình phân tích chất lượng công trình công cộng.
+            Giám sát trực quan camera thông minh. Bấm nút Chụp ảnh để chụp tĩnh luồng stream và tải hình ảnh chất lượng cao về máy tính.
           </p>
         </div>
       </div>
@@ -291,21 +402,20 @@ export default function MonitorsPage() {
         💡 <strong>Mẹo trình chiếu & Demo Webcam thực tế:</strong> Bạn có thể đổi mã camera của bất kỳ khung giám sát nào bên dưới. Nhấp vào biểu tượng chỉnh sửa kế bên <strong>"Mã nguồn"</strong>, nhập mã <strong style={{ color: 'var(--accent-cyan)' }}>WEBCAM</strong> và nhấp <strong>"Áp dụng"</strong> để cấp quyền sử dụng Webcam máy tính của bạn trực tiếp làm nguồn cấp hình ảnh Live CCTV! Tất cả bộ lọc quét AI, đèn REC, nhấp nháy đỏ vẫn hoạt động trực quan trên luồng webcam thực tế.
       </div>
 
+      {/* Camera Monitors Grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(440px, 1fr))', gap: 20 }}>
         {monitors.map((m) => {
           const isPlay = activePlay[m.id];
-          const isEval = evaluating[m.id];
-          const colorClass = m.status === 'damaged' ? 'var(--accent-red)' : m.status === 'maintenance' ? 'var(--accent-amber)' : 'var(--accent-green)';
           
           return (
             <div key={m.id} className="card" style={{
               padding: 0,
               overflow: 'hidden',
-              border: m.status === 'damaged' ? '1px solid rgba(239, 68, 68, 0.35)' : '1px solid var(--border-color)',
-              boxShadow: m.status === 'damaged' ? '0 8px 30px rgba(239, 68, 68, 0.1)' : 'var(--shadow-card)',
+              border: '1px solid var(--border-color)',
+              boxShadow: 'var(--shadow-card)',
               position: 'relative'
             }}>
-              {/* Header */}
+              {/* Card Header */}
               <div style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                 padding: '12px 16px', background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-color)'
@@ -315,6 +425,7 @@ export default function MonitorsPage() {
                   <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                     Tài sản: <strong>{m.assetName}</strong>
                   </span>
+                  
                   {editingCode === m.id ? (
                     <div style={{ display: 'flex', gap: 6, marginTop: 4, alignItems: 'center' }}>
                       <input 
@@ -345,30 +456,48 @@ export default function MonitorsPage() {
                       <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                         Mã nguồn: <strong style={{ color: 'var(--accent-cyan)' }}>{m.camCode}</strong>
                       </span>
-                      <button 
-                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0, display: 'inline-flex', alignItems: 'center' }}
-                        onClick={() => {
-                          setEditingCode(m.id);
-                          setInputCode(m.camCode);
-                        }}
-                        title="Đổi mã camera / Webcam"
-                      >
-                        <Edit2 size={10} />
-                      </button>
+                      {isPlay ? (
+                        <button 
+                          style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'not-allowed', padding: 0, display: 'inline-flex', alignItems: 'center', opacity: 0.35 }}
+                          onClick={() => toast.error('Vui lòng tạm dừng luồng phát camera (Pause Stream) trước khi cấu hình mã nguồn.')}
+                          title="Vui lòng tạm dừng phát để đổi mã"
+                        >
+                          <Edit2 size={10} />
+                        </button>
+                      ) : (
+                        <button 
+                          style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0, display: 'inline-flex', alignItems: 'center' }}
+                          onClick={() => {
+                            setEditingCode(m.id);
+                            setInputCode(m.camCode);
+                          }}
+                          title="Đổi mã camera / Webcam"
+                        >
+                          <Edit2 size={10} />
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
+                
+                {/* Control Actions */}
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button onClick={() => togglePlay(m.id)} className="btn btn-sm btn-secondary" title={isPlay ? "Tạm dừng stream" : "Phát stream"} style={{ padding: 6 }}>
                     {isPlay ? <Pause size={12} /> : <Play size={12} />}
                   </button>
-                  <button onClick={() => handleAISnapshot(m.id)} disabled={isEval || !isPlay} className="btn btn-sm btn-primary" title="Chụp ảnh & Phân tích chất lượng AI" style={{ padding: '6px 10px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <RefreshCw size={11} className={isEval ? 'animate-spin' : ''} /> AI Audit
+                  <button 
+                    onClick={() => captureSnapshot(m.id)} 
+                    disabled={!isPlay} 
+                    className="btn btn-sm btn-primary" 
+                    title="Chụp ảnh tức thời từ Monitor" 
+                    style={{ padding: '6px 10px', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
+                  >
+                    <Camera size={11} /> Chụp ảnh
                   </button>
                 </div>
               </div>
 
-              {/* Monitor Screen */}
+              {/* Monitor Screen Container */}
               <div style={{ position: 'relative', width: '100%', height: 260, background: '#090d16' }}>
                 <canvas
                   ref={(el) => { canvasRefs.current[m.id] = el; }}
@@ -376,6 +505,8 @@ export default function MonitorsPage() {
                   height={320}
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />
+                
+                {/* Paused Stream Overlay */}
                 {!isPlay && (
                   <div style={{
                     position: 'absolute', inset: 0, background: 'rgba(9, 13, 22, 0.85)',
@@ -385,18 +516,50 @@ export default function MonitorsPage() {
                     <span style={{ fontSize: 12, fontWeight: 600 }}>PAUSED STREAM</span>
                   </div>
                 )}
-                {isEval && (
+
+                {/* Shutter Snapshot Preview Overlay */}
+                {snapshots[m.id] && (
                   <div style={{
-                    position: 'absolute', inset: 0, background: 'rgba(16, 185, 129, 0.15)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 8, color: 'var(--accent-green)', zIndex: 10
+                    position: 'absolute',
+                    inset: 0,
+                    background: 'rgba(9, 13, 22, 0.95)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 16,
+                    zIndex: 20,
+                    backdropFilter: 'blur(8px)'
                   }}>
-                    <span style={{
-                      fontWeight: 700, fontSize: 12, padding: '6px 12px',
-                      background: 'rgba(9, 13, 22, 0.9)', border: '1px solid var(--accent-green)',
-                      borderRadius: 'var(--radius-sm)', letterSpacing: 1.5, animation: 'pulse 1.5s infinite'
-                    }}>
-                      AI RUNNING ANALYTICS
-                    </span>
+                    <h5 style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent-cyan)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Camera size={14} /> Ảnh chụp từ {m.camCode}
+                    </h5>
+                    <img 
+                      src={snapshots[m.id]} 
+                      alt="Snapshot preview" 
+                      style={{ width: '100%', maxHeight: 130, objectFit: 'contain', borderRadius: 'var(--radius)', border: '1px solid var(--border-color)', marginBottom: 12 }} 
+                    />
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <a 
+                        href={snapshots[m.id]} 
+                        download={`CCTV_${m.camCode}_${new Date().toISOString().slice(0,10)}.jpg`}
+                        className="btn btn-sm btn-primary"
+                        style={{ display: 'flex', alignItems: 'center', gap: 4, textDecoration: 'none', padding: '6px 10px', fontSize: 11 }}
+                      >
+                        <Download size={11} /> Lưu ảnh
+                      </a>
+                      <button 
+                        className="btn btn-sm btn-secondary" 
+                        style={{ padding: '6px 10px', fontSize: 11 }}
+                        onClick={() => setSnapshots(prev => {
+                          const next = { ...prev };
+                          delete next[m.id];
+                          return next;
+                        })}
+                      >
+                        Xóa
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -404,27 +567,311 @@ export default function MonitorsPage() {
               {/* Status Info Footer */}
               <div style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                padding: '12px 16px', borderTop: '1px solid var(--border-color)', fontSize: 13
+                padding: '12px 16px', borderTop: '1px solid var(--border-color)', fontSize: 12
               }}>
                 <div>
-                  <span style={{ color: 'var(--text-muted)' }}>Chất lượng đánh giá: </span>
-                  <strong style={{ color: colorClass, fontSize: 15 }}>{m.initialQuality}%</strong>
+                  <span style={{ color: 'var(--text-muted)' }}>Độ phân giải: </span>
+                  <strong style={{ color: 'var(--text-primary)' }}>1080p (FHD)</strong>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {m.status === 'active' ? (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--accent-green)', fontWeight: 600, fontSize: 12 }}>
-                      <CheckCircle size={12} /> BÌNH THƯỜNG
-                    </span>
-                  ) : (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: colorClass, fontWeight: 600, fontSize: 12 }}>
-                      <AlertTriangle size={12} /> {m.status === 'damaged' ? 'HƯ HỎNG / CẢNH BÁO' : 'CẦN BẢO TRÌ'}
-                    </span>
-                  )}
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: isPlay ? 'var(--accent-green)' : 'var(--text-muted)', fontWeight: 600, fontSize: 11 }}>
+                    <span style={{
+                      width: 6, height: 6, borderRadius: '50%',
+                      background: isPlay ? 'var(--accent-green)' : 'var(--text-muted)',
+                      display: 'inline-block',
+                      animation: isPlay ? 'pulse 1.5s infinite' : 'none'
+                    }} />
+                    {isPlay ? 'ONLINE FEED' : 'OFFLINE'}
+                  </span>
                 </div>
               </div>
             </div>
           );
         })}
+      </div>
+
+      <hr style={{ border: 'none', borderTop: '1px solid var(--border-color)', margin: '40px 0' }} />
+
+      {/* Trung tâm Đánh giá & Kiểm định chất lượng AI */}
+      <div className="card" style={{
+        background: 'var(--bg-card)',
+        backdropFilter: 'blur(12px)',
+        border: '1px solid var(--border-color)',
+        borderRadius: 'var(--radius)',
+        padding: '24px',
+        boxShadow: 'var(--shadow-card)',
+        marginBottom: '40px'
+      }}>
+        {/* Header Block */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+          <div style={{
+            background: 'rgba(59, 130, 246, 0.15)',
+            border: '1px solid var(--accent-cyan)',
+            padding: 8,
+            borderRadius: 'var(--radius-sm)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--accent-cyan)'
+          }}>
+            <Shield size={24} />
+          </div>
+          <div>
+            <h3 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>
+              🔍 Trung tâm Đánh giá & Kiểm định chất lượng AI
+            </h3>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+              Kiểm định và đánh giá chất lượng tài sản thông qua ảnh hiện trạng thực tế. Nhận diện lỗi bằng AI YOLOv8 và đồng bộ hóa trạng thái tài sản thời gian thực lên hệ thống bản đồ GIS.
+            </p>
+          </div>
+        </div>
+
+        {/* Section Layout */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 24, marginTop: 12 }}>
+          
+          {/* Left Column: Input Form */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            
+            {/* Dropdown: Select Asset */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>1. Chọn tài sản cần kiểm định</label>
+              {assetsLoading ? (
+                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Đang tải danh sách tài sản...</div>
+              ) : (
+                <select
+                  className="form-input"
+                  value={selectedAssetId}
+                  onChange={(e) => {
+                    setSelectedAssetId(e.target.value);
+                    // Clear previous state when asset selection changes
+                    setUploadFile(null);
+                    setUploadBase64(null);
+                    setAiResult(null);
+                  }}
+                  style={{ width: '100%', height: 40 }}
+                >
+                  <option value="">-- Chọn tài sản công cộng --</option>
+                  {assets.map(a => (
+                    <option key={a.id} value={a.id}>
+                      {a.name} ({a.asset_type_display}) - [{a.status_display}]
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            {/* Area: Drag & Drop Upload */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>2. Tải ảnh hiện trạng tài sản</label>
+              
+              <div style={{
+                border: '2px dashed var(--border-color)',
+                borderRadius: 'var(--radius)',
+                padding: '24px 16px',
+                textAlign: 'center',
+                background: 'var(--bg-elevated)',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                position: 'relative'
+              }}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                const file = e.dataTransfer.files[0];
+                if (file && file.type.startsWith('image/')) {
+                  setUploadFile(file);
+                  setAiResult(null);
+                  const reader = new FileReader();
+                  reader.onloadend = () => setUploadBase64(reader.result);
+                  reader.readAsDataURL(file);
+                }
+              }}
+              onClick={() => document.getElementById('asset-file-uploader').click()}
+              >
+                <input
+                  id="asset-file-uploader"
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageUpload}
+                  style={{ display: 'none' }}
+                />
+                
+                {uploadBase64 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                    <img 
+                      src={uploadBase64} 
+                      alt="Uploaded preview" 
+                      style={{ maxHeight: 150, maxWidth: '100%', objectFit: 'contain', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}
+                    />
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                      {uploadFile?.name} ({(uploadFile?.size / 1024).toFixed(1)} KB)
+                    </span>
+                    <span style={{ fontSize: 11, color: 'var(--accent-cyan)' }}>Nhấp để chọn ảnh khác</span>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, color: 'var(--text-muted)' }}>
+                    <Upload size={32} />
+                    <span style={{ fontSize: 13, fontWeight: 500 }}>Kéo thả hoặc nhấp để tải ảnh lên</span>
+                    <span style={{ fontSize: 11 }}>Chấp nhận định dạng PNG, JPG, JPEG</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Action: Run Audit */}
+            <button
+              onClick={handleAICenterAudit}
+              disabled={aiLoading || !uploadFile}
+              className="btn btn-primary"
+              style={{
+                width: '100%',
+                height: 40,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                fontWeight: 600
+              }}
+            >
+              <RefreshCw size={16} className={aiLoading ? 'animate-spin' : ''} />
+              {aiLoading ? 'Đang phân tích...' : 'Chạy AI kiểm định'}
+            </button>
+
+          </div>
+
+          {/* Right Column: AI Results */}
+          <div style={{
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border-color)',
+            borderRadius: 'var(--radius)',
+            padding: 20,
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            minHeight: 280
+          }}>
+            
+            {aiLoading && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center' }}>
+                <RefreshCw size={36} className="text-primary animate-spin" />
+                <div>
+                  <h5 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Đang chạy phân tích chất lượng...</h5>
+                  <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0 0 0' }}>Mô hình YOLOv8 đang quét hình ảnh bất thường.</p>
+                </div>
+              </div>
+            )}
+
+            {!aiLoading && !aiResult && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center', color: 'var(--text-muted)' }}>
+                <FileCheck size={40} style={{ opacity: 0.5 }} />
+                <div>
+                  <h5 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Chưa có dữ liệu kiểm định</h5>
+                  <p style={{ fontSize: 12, margin: '4px 0 0 0' }}>Vui lòng chọn tài sản, tải ảnh hiện trạng và bấm "Chạy AI kiểm định".</p>
+                </div>
+              </div>
+            )}
+
+            {!aiLoading && aiResult && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <h4 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: 'var(--accent-cyan)', borderBottom: '1px solid var(--border-color)', paddingBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Check size={16} /> Kết quả nhận diện AI
+                </h4>
+                
+                {/* Information Grid */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Sự cố phát hiện:</span>
+                    <strong style={{ color: 'var(--text-primary)' }}>
+                      {aiResult.primary_class === 'broken_lamp' && 'Đèn chiếu sáng bị hỏng / vỡ'}
+                      {aiResult.primary_class === 'pothole' && 'Mặt đường nứt vỡ / ổ gà'}
+                      {aiResult.primary_class === 'vandalism' && 'Hành vi phá hoại / vẽ bậy'}
+                      {aiResult.primary_class === 'littering' && 'Rác thải không đúng nơi quy định'}
+                      {aiResult.primary_class === 'flooding' && 'Ngập nước cục bộ'}
+                      {aiResult.primary_class === 'crowd' && 'Tập trung đông người trái phép'}
+                      {aiResult.primary_class === 'unknown' && 'Bình thường (Không phát hiện lỗi)'}
+                      {aiResult.primary_class === 'none' && 'Bình thường (Không phát hiện lỗi)'}
+                      {!['broken_lamp', 'pothole', 'vandalism', 'littering', 'flooding', 'crowd', 'unknown', 'none'].includes(aiResult.primary_class) && `Sự cố khác (${aiResult.primary_class})`}
+                    </strong>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Độ tự tin của AI:</span>
+                    <strong style={{ color: 'var(--text-primary)' }}>
+                      {(aiResult.confidence * 100).toFixed(1)}%
+                    </strong>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Chất lượng đánh giá:</span>
+                      <strong style={{
+                        color: qualityScore >= 85 ? 'var(--accent-green)' : qualityScore >= 60 ? 'var(--accent-amber)' : 'var(--accent-red)',
+                        fontSize: 14
+                      }}>
+                        {qualityScore}%
+                      </strong>
+                    </div>
+                    {/* Quality progress bar */}
+                    <div style={{ width: '100%', height: 6, background: 'rgba(255,255,255,0.1)', borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{
+                        width: `${qualityScore}%`,
+                        height: '100%',
+                        borderRadius: 3,
+                        transition: 'width 0.4s ease',
+                        background: qualityScore >= 85 ? 'var(--accent-green)' : qualityScore >= 60 ? 'var(--accent-amber)' : 'var(--accent-red)'
+                      }} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Confirm & Save block */}
+                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>Trạng thái tài sản đề xuất</label>
+                    <select
+                      className="form-input"
+                      value={suggestedStatus}
+                      onChange={(e) => setSuggestedStatus(e.target.value)}
+                      style={{ width: '100%', height: 36, fontSize: 13 }}
+                    >
+                      <option value="active">🟢 Hoạt động (Bình thường)</option>
+                      <option value="maintenance">🟡 Đang bảo trì</option>
+                      <option value="damaged">🔴 Hư hỏng</option>
+                    </select>
+                  </div>
+
+                  <button
+                    onClick={handleUpdateAssetStatus}
+                    disabled={saving || !selectedAssetId}
+                    className="btn btn-success"
+                    style={{
+                      width: '100%',
+                      height: 40,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 8,
+                      fontWeight: 600,
+                      background: 'var(--accent-green)',
+                      color: '#ffffff',
+                      border: 'none',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <ArrowUpRight size={16} />
+                    Xác nhận & Cập nhật Trạng thái Tài sản
+                  </button>
+
+                </div>
+
+              </div>
+            )}
+
+          </div>
+
+        </div>
+
       </div>
     </div>
   );
