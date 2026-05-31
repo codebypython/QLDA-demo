@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useReportsStore, useAuthStore } from '../store';
-import { reportsAPI, aiAPI, usersAPI, areasAPI } from '../services/api';
-import { Plus, Upload, Eye, Download, X, CheckCircle } from 'lucide-react';
+import { useReportsStore, useAuthStore, useSettingsStore } from '../store';
+import { reportsAPI, aiAPI, usersAPI, areasAPI, assetsAPI, getErrorMessage } from '../services/api';
+import { Plus, Upload, Eye, Download, X, CheckCircle, MapPin, ExternalLink } from 'lucide-react';
+import LocationPickerModal from '../components/map/LocationPickerModal';
+import ConfirmActionModal from '../components/common/ConfirmActionModal';
 import toast from 'react-hot-toast';
 
 const STATUS_BADGE = {
@@ -14,6 +16,7 @@ export default function ReportsPage() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const { reports, fetchReports, loading } = useReportsStore();
+  const { settings } = useSettingsStore();
   const [showForm, setShowForm] = useState(false);
   const [statusFilter, setStatusFilter] = useState('');
   const [areaFilter, setAreaFilter] = useState('');
@@ -27,17 +30,33 @@ export default function ReportsPage() {
   });
   const [imageFile, setImageFile] = useState(null);
   const [aiResult, setAiResult] = useState(null);
+  const [pickMapOpen, setPickMapOpen] = useState(false);
+  const [mapAssets, setMapAssets] = useState([]);
+  const [finalizeReportId, setFinalizeReportId] = useState(null);
 
   const isOperator = user?.role === 'operator' || user?.role === 'admin';
+
+  useEffect(() => {
+    if (showForm) {
+      assetsAPI.list({ bbox: '108.17,16.03,108.26,16.14' }).then(({ data }) => {
+        const rows = data.results || data;
+        setMapAssets(rows.slice(0, 80));
+      }).catch(() => setMapAssets([]));
+    }
+  }, [showForm]);
 
   useEffect(() => {
     fetchReports(statusFilter ? { status: statusFilter } : {});
   }, [statusFilter]);
 
   useEffect(() => {
-    areasAPI.list().then(({ data }) => setAreas(data.results || data)).catch(() => {});
+    areasAPI.list()
+      .then(({ data }) => setAreas(data.results || data))
+      .catch((err) => toast.error('Không thể tải danh sách khu vực: ' + getErrorMessage(err)));
     if (isOperator) {
-      usersAPI.listByRole('taskforce').then(({ data }) => setTaskforces(data)).catch(() => {});
+      usersAPI.listByRole('taskforce')
+        .then(({ data }) => setTaskforces(data))
+        .catch((err) => toast.error('Không thể tải danh sách lực lượng tác vụ: ' + getErrorMessage(err)));
     }
   }, [isOperator]);
 
@@ -58,7 +77,7 @@ export default function ReportsPage() {
     try {
       const { data } = await aiAPI.classify(file);
       setAiResult(data);
-      const threshold = 0.5;
+      const threshold = settings.ai_confidence_threshold ?? 0.5;
       if (data.primary_class && data.primary_class !== 'unknown') {
         if (data.confidence >= threshold) {
           setForm((f) => ({ ...f, incident_type: data.primary_class }));
@@ -67,8 +86,8 @@ export default function ReportsPage() {
           setPendingClassify(data);
         }
       }
-    } catch {
-      toast.error('AI service không khả dụng');
+    } catch (err) {
+      toast.error('AI service không khả dụng: ' + getErrorMessage(err));
     }
   };
 
@@ -84,16 +103,21 @@ export default function ReportsPage() {
       setImageFile(null);
       setAiResult(null);
       fetchReports();
-    } catch { toast.error('Lỗi gửi báo cáo'); }
+    } catch (err) {
+      toast.error('Lỗi gửi báo cáo: ' + getErrorMessage(err));
+    }
   };
 
   const handleStatusUpdate = async (id, status, extra = {}) => {
     try {
       await reportsAPI.updateStatus(id, { status, ...extra });
-      toast.success('Cập nhật trạng thái');
+      toast.success('Cập nhật trạng thái thành công');
       fetchReports();
       setAssignModal(null);
-    } catch { toast.error('Lỗi cập nhật'); }
+    } catch (err) {
+      toast.error('Lỗi cập nhật: ' + getErrorMessage(err));
+      throw new Error('update_failed');
+    }
   };
 
   return (
@@ -154,6 +178,19 @@ export default function ReportsPage() {
                 <input className="form-input" type="number" step="any" value={form.longitude} onChange={(e) => setForm({ ...form, longitude: +e.target.value })} />
               </div>
             </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPickMapOpen(true)}>
+                <MapPin size={14} /> Chọn trên map
+              </button>
+              <a
+                className="btn btn-secondary btn-sm"
+                href={`/map?focus=${encodeURIComponent(`${form.latitude},${form.longitude},16`)}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <ExternalLink size={14} /> Mở GIS
+              </a>
+            </div>
             <div className="form-group">
               <label className="form-label">Mô tả</label>
               <textarea className="form-textarea" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
@@ -184,6 +221,16 @@ export default function ReportsPage() {
             </div>
             <button type="submit" className="btn btn-primary"><Upload size={14} /> Gửi báo cáo</button>
           </form>
+          <LocationPickerModal
+            open={pickMapOpen}
+            onClose={() => setPickMapOpen(false)}
+            initialLatitude={form.latitude}
+            initialLongitude={form.longitude}
+            contextAssets={mapAssets}
+            contextReports={Array.isArray(reports) ? reports.slice(0, 50) : []}
+            title="Chọn vị trí báo cáo"
+            onApply={(lat, lng) => setForm((f) => ({ ...f, latitude: lat, longitude: lng }))}
+          />
         </div>
       )}
 
@@ -216,7 +263,7 @@ export default function ReportsPage() {
                       <button className="btn btn-sm btn-primary" onClick={() => setAssignModal(r)}>Phân công</button>
                     )}
                     {isOperator && (r.status === 'assigned' || r.status === 'in_progress') && (
-                      <button className="btn btn-sm btn-primary" onClick={() => handleStatusUpdate(r.id, 'resolved')}>
+                      <button className="btn btn-sm btn-primary" type="button" onClick={() => setFinalizeReportId(r.id)}>
                         <CheckCircle size={12} /> Hoàn tất
                       </button>
                     )}
@@ -236,6 +283,18 @@ export default function ReportsPage() {
           onAssign={(uid) => handleStatusUpdate(assignModal.id, 'assigned', { assigned_to: uid })}
         />
       )}
+
+      <ConfirmActionModal
+        open={!!finalizeReportId}
+        onClose={() => setFinalizeReportId(null)}
+        title="Xác nhận đóng / giải quyết sự cố"
+        description="Đánh dấu báo cáo là đã giải quyết là quyết định cuối từ phía điều hành. Luồng xử lý thường không thể hoàn tác bằng một nút; chỉ đóng khi đã kiểm tra đủ chứng cứ và công việc thực địa."
+        confirmLabel="Xác nhận đã giải quyết"
+        typedPhrase="XÁC NHẬN"
+        typedPhraseHint="Nhập chính xác cụm sau (không phân biệt hoa thường):"
+        acknowledgeLabel="Tôi đã đối chiếu báo cáo, tác vụ / bình luận liên quan và xác nhận sự cố đã được xử lý đúng quy trình."
+        onConfirm={() => handleStatusUpdate(finalizeReportId, 'resolved')}
+      />
     </div>
   );
 }

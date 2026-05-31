@@ -33,14 +33,23 @@ class ReadOnlyOrOperator(BasePermission):
         return _role(request.user) in ('operator', 'admin')
 
 
+class ReadOnlyAuthenticatedOrAdminWrite(BasePermission):
+    """All authenticated users may read; only admin may POST/PATCH/DELETE."""
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        if request.method in SAFE_METHODS:
+            return True
+        return _role(request.user) == 'admin'
+
+
 class ReportPermission(BasePermission):
     """
     Reports:
     - Anyone authenticated may create.
-    - Citizen sees only their own (filtered in queryset).
-    - Operator/admin: full access.
-    - Taskforce: read-only on reports linked to their tasks (filtered in queryset).
-    - Only operator/admin may update_status, delete.
+    - Citizen: own reports; may PATCH/DELETE own only while status is pending.
+    - Operator/admin: full access including update_status.
+    - Taskforce: read on reports linked to their tasks; no report body CUD.
     """
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
@@ -52,18 +61,26 @@ class ReportPermission(BasePermission):
         if action in ('list', 'retrieve', 'stats', 'timeline', 'analytics_timeline',
                       'analytics_response_time', 'analytics_hour_heatmap',
                       'analytics_top_areas', 'analytics_ai_accuracy',
-                      'export', 'comments'):
+                      'export', 'comments', 'comment_detail'):
             return True
-        if action in ('update', 'partial_update', 'destroy', 'update_status'):
+        if action == 'update_status':
             return role in ('operator', 'admin')
+        if action in ('update', 'partial_update', 'destroy'):
+            return role in ('operator', 'admin', 'citizen')
         return True
 
     def has_object_permission(self, request, view, obj):
+        from apps.reports.models import IncidentReport
         role = _role(request.user)
+        action = getattr(view, 'action', None)
         if role in ('operator', 'admin'):
             return True
         if role == 'citizen':
-            return obj.reporter_id == request.user.id
+            if obj.reporter_id != request.user.id:
+                return False
+            if action in ('partial_update', 'update', 'destroy'):
+                return obj.status == IncidentReport.Status.PENDING
+            return True
         if role == 'taskforce':
             return obj.tasks.filter(assigned_to=request.user).exists()
         return False
@@ -83,10 +100,14 @@ class TaskPermission(BasePermission):
         if role == 'citizen':
             return False
         action = getattr(view, 'action', None)
+        if action == 'export':
+            return role in ('operator', 'admin')
         if action in ('list', 'retrieve'):
             return role in ('operator', 'admin', 'taskforce')
-        if action in ('create', 'update', 'partial_update', 'destroy'):
+        if action in ('create', 'destroy'):
             return role in ('operator', 'admin')
+        if action in ('update', 'partial_update'):
+            return role in ('operator', 'admin', 'taskforce')
         if action in ('complete',):
             return role in ('operator', 'admin', 'taskforce')
         return True
@@ -101,13 +122,35 @@ class TaskPermission(BasePermission):
 
 
 class MaintenancePermission(BasePermission):
-    """Operator/admin full; taskforce read-only."""
+    """
+    Citizen: no access.
+    Authenticated reads: operator, admin, taskforce.
+    Writes: operator, admin full; taskforce create + patch own technician logs.
+    """
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
         role = _role(request.user)
         if role == 'citizen':
             return False
+        action = getattr(view, 'action', None)
+        if action == 'export':
+            return role in ('operator', 'admin')
         if request.method in SAFE_METHODS:
+            return role in ('operator', 'admin', 'taskforce')
+        if action == 'create':
+            return role in ('operator', 'admin', 'taskforce')
+        if action == 'destroy':
+            return role in ('operator', 'admin')
+        if action in ('update', 'partial_update'):
+            return role in ('operator', 'admin', 'taskforce')
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        role = _role(request.user)
+        if role in ('operator', 'admin'):
             return True
-        return role in ('operator', 'admin')
+        if role == 'taskforce':
+            technician_id = getattr(obj, 'technician_id', None)
+            return technician_id == request.user.id
+        return False

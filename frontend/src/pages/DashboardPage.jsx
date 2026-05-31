@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAssetsStore, useReportsStore, useAuthStore } from '../store';
-import { reportsAPI, tasksAPI, usersAPI } from '../services/api';
+import { reportsAPI, tasksAPI, usersAPI, assetsAPI, getErrorMessage } from '../services/api';
 import {
   Package, AlertTriangle, CheckCircle, Clock, Users, Activity,
   ClipboardList, Plus,
@@ -43,12 +43,36 @@ function StatCard({ icon: Icon, value, label, color }) {
 
 function CitizenDashboard() {
   const [myReports, setMyReports] = useState([]);
-  useEffect(() => {
-    reportsAPI.list().then(({ data }) => setMyReports(data.results || data)).catch(() => {});
-  }, []);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const loadMyReports = () => {
+    setLoading(true);
+    setError('');
+    reportsAPI.list()
+      .then(({ data }) => setMyReports(data.results || data))
+      .catch((err) => setError('Không thể tải báo cáo của bạn: ' + getErrorMessage(err)))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { loadMyReports(); }, []);
+
   const total = myReports.length;
   const resolved = myReports.filter((r) => r.status === 'resolved').length;
   const pending = myReports.filter((r) => r.status === 'pending').length;
+
+  if (loading) {
+    return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>Đang tải thông tin dashboard...</div>;
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: 24, textAlign: 'center' }} className="card">
+        <p style={{ color: 'var(--accent-red)', marginBottom: 12 }}>{error}</p>
+        <button className="btn btn-primary btn-sm" onClick={loadMyReports}>Thử lại</button>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -89,12 +113,36 @@ function CitizenDashboard() {
 
 function TaskforceDashboard() {
   const [tasks, setTasks] = useState([]);
-  useEffect(() => {
-    tasksAPI.list({ assigned_to: 'me', order: 'priority' }).then(({ data }) => setTasks(data.results || data)).catch(() => {});
-  }, []);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const loadTasks = () => {
+    setLoading(true);
+    setError('');
+    tasksAPI.list({ assigned_to: 'me', order: 'priority' })
+      .then(({ data }) => setTasks(data.results || data))
+      .catch((err) => setError('Không thể tải danh sách tác vụ của bạn: ' + getErrorMessage(err)))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { loadTasks(); }, []);
+
   const pending = tasks.filter((t) => t.status !== 'completed').length;
   const done = tasks.filter((t) => t.status === 'completed').length;
   const urgent = tasks.filter((t) => t.priority === 'urgent' && t.status !== 'completed').length;
+
+  if (loading) {
+    return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>Đang tải danh sách tác vụ...</div>;
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: 24, textAlign: 'center' }} className="card">
+        <p style={{ color: 'var(--accent-red)', marginBottom: 12 }}>{error}</p>
+        <button className="btn btn-primary btn-sm" onClick={loadTasks}>Thử lại</button>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -131,22 +179,55 @@ function TaskforceDashboard() {
 }
 
 function OperatorDashboard({ isAdmin }) {
-  const { stats: assetStats, fetchStats: fetchAssetStats } = useAssetsStore();
-  const { stats: reportStats, fetchStats: fetchReportStats } = useReportsStore();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [assetStats, setAssetStats] = useState(null);
+  const [reportStats, setReportStats] = useState(null);
   const [taskforces, setTaskforces] = useState([]);
 
-  useEffect(() => {
-    fetchAssetStats();
-    fetchReportStats();
-    if (isAdmin) {
-      usersAPI.adminList().then(({ data }) => setTaskforces(data.results || data)).catch(() => {});
+  const loadOperatorData = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const promises = [
+        assetsAPI.stats(),
+        reportsAPI.stats()
+      ];
+      if (isAdmin) {
+        promises.push(usersAPI.adminList());
+      }
+      const results = await Promise.all(promises);
+      setAssetStats(results[0].data);
+      setReportStats(results[1].data);
+      if (isAdmin) {
+        setTaskforces(results[2].data.results || results[2].data);
+      }
+    } catch (err) {
+      setError('Không thể tải dữ liệu phân tích vận hành: ' + getErrorMessage(err));
+    } finally {
+      setLoading(false);
     }
-  }, [isAdmin]);
+  };
+
+  useEffect(() => { loadOperatorData(); }, [isAdmin]);
 
   const totalAssets = assetStats?.total || 0;
   const totalReports = reportStats?.total || 0;
   const resolvedReports = reportStats?.by_status?.find((s) => s.status === 'resolved')?.count || 0;
   const pendingReports = reportStats?.by_status?.find((s) => s.status === 'pending')?.count || 0;
+
+  if (loading) {
+    return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>Đang tính toán thống kê vận hành...</div>;
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: 24, textAlign: 'center' }} className="card">
+        <p style={{ color: 'var(--accent-red)', marginBottom: 12 }}>{error}</p>
+        <button className="btn btn-primary btn-sm" onClick={loadOperatorData}>Thử lại</button>
+      </div>
+    );
+  }
 
   const assetTypeData = {
     labels: Object.keys(assetStats?.by_type || {}),

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { authAPI, assetsAPI, reportsAPI } from '../services/api';
+import { authAPI, assetsAPI, reportsAPI, systemAPI } from '../services/api';
 
 // Auth Store
 export const useAuthStore = create((set) => ({
@@ -83,5 +83,27 @@ export const useReportsStore = create((set) => ({
       const { data } = await reportsAPI.stats();
       set({ stats: data });
     } catch { /* ignore */ }
+  },
+}));
+
+// Settings Store
+export const useSettingsStore = create((set, get) => ({
+  settings: {
+    system_name: 'InfraWatch',
+    logo_url: '',
+    ai_confidence_threshold: 0.5,
+    default_map_center: { lat: 16.0678, lng: 108.2208, zoom: 14 },
+    notification_polling_seconds: 30,
+  },
+  loading: false,
+
+  fetchSettings: async () => {
+    set({ loading: true });
+    try {
+      const { data } = await systemAPI.getSettings();
+      set({ settings: { ...get().settings, ...data }, loading: false });
+    } catch {
+      set({ loading: false });
+    }
   },
 }));

@@ -5,7 +5,12 @@ from rest_framework.response import Response
 from django.db.models import Count, Avg
 from django.utils import timezone
 from .models import IncidentReport
-from .serializers import ReportSerializer, ReportCreateSerializer
+from .serializers import (
+    ReportSerializer,
+    ReportCreateSerializer,
+    ReportCitizenUpdateSerializer,
+    ReportOperatorUpdateSerializer,
+)
 from apps.users.permissions import ReportPermission
 from apps.audit.models import ActivityLog
 
@@ -47,7 +52,21 @@ class ReportViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == 'create':
             return ReportCreateSerializer
+        if self.action in ('partial_update', 'update'):
+            role = getattr(self.request.user, 'role', None)
+            if role == 'citizen':
+                return ReportCitizenUpdateSerializer
+            return ReportOperatorUpdateSerializer
         return ReportSerializer
+
+    def perform_destroy(self, instance):
+        rid = instance.id
+        reporter = instance.reporter_id
+        ActivityLog.log(
+            self.request.user, 'report.deleted', 'report', rid,
+            details={'reporter_id': str(reporter) if reporter else None, 'status': instance.status},
+        )
+        instance.delete()
 
     @action(detail=True, methods=['patch'])
     def update_status(self, request, pk=None):
@@ -100,22 +119,33 @@ class ReportViewSet(viewsets.ModelViewSet):
         if new_status == 'resolved':
             # Auto MaintenanceLog if asset linked through related task
             related_asset_id = request.data.get('asset')
+            asset = None
+            technician = request.user
+            
+            # Retrieve linked task to get asset and assigned technician
+            task = report.tasks.filter(related_asset__isnull=False).first()
             if related_asset_id:
                 from apps.assets.models import Asset
                 asset = Asset.objects.filter(id=related_asset_id).first()
-                if asset:
-                    MaintenanceLog.objects.create(
-                        asset=asset,
-                        report=report,
-                        technician=request.user,
-                        status='completed',
-                        completed_at=timezone.now(),
-                        notes=f'Tự động tạo từ report #{str(report.id)[:8]}',
-                    )
-                    asset.last_maintained_at = timezone.now().date()
-                    if asset.status in ('damaged', 'maintenance'):
-                        asset.status = 'active'
-                    asset.save()
+            elif task:
+                asset = task.related_asset
+                
+            if task and task.assigned_to:
+                technician = task.assigned_to
+
+            if asset:
+                MaintenanceLog.objects.create(
+                    asset=asset,
+                    report=report,
+                    technician=technician,
+                    status='completed',
+                    completed_at=timezone.now(),
+                    notes=f'Tự động tạo từ report #{str(report.id)[:8]}',
+                )
+                asset.last_maintained_at = timezone.now().date()
+                if asset.status in ('damaged', 'maintenance'):
+                    asset.status = 'active'
+                asset.save()
             if report.reporter:
                 Notification.notify(
                     recipient=report.reporter,
@@ -172,6 +202,49 @@ class ReportViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         comment = serializer.save(report=report, author=request.user)
         return Response(CommentSerializer(comment).data, status=status.HTTP_201_CREATED)
+
+    @action(
+        detail=True,
+        methods=['patch', 'delete'],
+        url_path=r'comments/(?P<comment_id>[0-9a-fA-F-]{36})',
+    )
+    def comment_detail(self, request, pk=None, comment_id=None):
+        from apps.comments.models import Comment
+        from apps.comments.serializers import CommentSerializer, CommentPatchSerializer
+
+        report = self.get_object()
+        comment = Comment.objects.filter(id=comment_id, report=report).first()
+        if not comment:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        role = getattr(request.user, 'role', None)
+        is_mod = role in ('operator', 'admin')
+        is_author = comment.author_id == request.user.id
+
+        if request.method == 'DELETE':
+            if not is_mod and not is_author:
+                return Response({'detail': 'Forbidden.'}, status=status.HTTP_403_FORBIDDEN)
+            if is_author and not is_mod:
+                if role == 'citizen' and report.reporter_id != request.user.id:
+                    return Response({'detail': 'Forbidden.'}, status=status.HTTP_403_FORBIDDEN)
+                if role == 'taskforce' and not report.tasks.filter(assigned_to=request.user).exists():
+                    return Response({'detail': 'Forbidden.'}, status=status.HTTP_403_FORBIDDEN)
+            comment.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        # PATCH
+        if not is_mod and not is_author:
+            return Response({'detail': 'Forbidden.'}, status=status.HTTP_403_FORBIDDEN)
+        if is_author and not is_mod:
+            if role == 'citizen' and report.reporter_id != request.user.id:
+                return Response({'detail': 'Forbidden.'}, status=status.HTTP_403_FORBIDDEN)
+            if role == 'taskforce' and not report.tasks.filter(assigned_to=request.user).exists():
+                return Response({'detail': 'Forbidden.'}, status=status.HTTP_403_FORBIDDEN)
+
+        ser = CommentPatchSerializer(comment, data=request.data, partial=True)
+        ser.is_valid(raise_exception=True)
+        ser.save()
+        return Response(CommentSerializer(comment).data)
 
     @action(detail=True, methods=['get'])
     def timeline(self, request, pk=None):
@@ -249,7 +322,7 @@ class ReportViewSet(viewsets.ModelViewSet):
                 bins['85-100%'] += 1
         return Response([{'bucket': k, 'count': v} for k, v in bins.items()])
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='actions/export-csv')
     def export(self, request):
         import csv
         from io import StringIO

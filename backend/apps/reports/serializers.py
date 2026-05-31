@@ -20,7 +20,10 @@ class ReportSerializer(serializers.ModelSerializer):
             'status', 'status_display', 'tasks',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'reporter', 'ai_confidence', 'tasks', 'created_at', 'updated_at']
+        read_only_fields = [
+            'id', 'reporter', 'ai_confidence', 'status',
+            'tasks', 'created_at', 'updated_at',
+        ]
 
     def get_tasks(self, obj):
         return [
@@ -56,3 +59,19 @@ class ReportCreateSerializer(serializers.ModelSerializer):
             validated_data['_longitude'] = lng
         validated_data['reporter'] = self.context['request'].user
         return super().create(validated_data)
+
+
+class ReportCitizenUpdateSerializer(serializers.ModelSerializer):
+    """Citizen-only: edit own pending report fields (location fixed at create time)."""
+
+    class Meta:
+        model = IncidentReport
+        fields = ['description', 'incident_type', 'severity', 'image']
+
+
+class ReportOperatorUpdateSerializer(serializers.ModelSerializer):
+    """Operator/admin: body + image updates; workflow status stays on update_status action."""
+
+    class Meta:
+        model = IncidentReport
+        fields = ['description', 'incident_type', 'severity', 'image']

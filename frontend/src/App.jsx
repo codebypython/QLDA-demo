@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { useAuthStore } from './store';
+import { useAuthStore, useSettingsStore } from './store';
 import Layout from './components/common/Layout';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
@@ -15,6 +15,7 @@ import AnalyticsPage from './pages/AnalyticsPage';
 import UsersAdminPage from './pages/admin/UsersAdminPage';
 import ActivityPage from './pages/admin/ActivityPage';
 import SettingsPage from './pages/admin/SettingsPage';
+import AreasAdminPage from './pages/admin/AreasAdminPage';
 import { Toaster } from 'react-hot-toast';
 import { useEffect } from 'react';
 
@@ -27,9 +28,13 @@ function ProtectedRoute({ children, allow }) {
 
 export default function App() {
   const { isAuthenticated, loadProfile } = useAuthStore();
+  const { fetchSettings } = useSettingsStore();
 
   useEffect(() => {
-    if (isAuthenticated) loadProfile();
+    if (isAuthenticated) {
+      loadProfile();
+      fetchSettings();
+    }
   }, [isAuthenticated]);
 
   return (
@@ -64,7 +69,7 @@ export default function App() {
                     <ProtectedRoute allow={['operator', 'taskforce', 'admin']}><TasksPage /></ProtectedRoute>
                   } />
                   <Route path="/maintenance" element={
-                    <ProtectedRoute allow={['operator', 'admin']}><MaintenancePage /></ProtectedRoute>
+                    <ProtectedRoute allow={['operator', 'taskforce', 'admin']}><MaintenancePage /></ProtectedRoute>
                   } />
                   <Route path="/analytics" element={
                     <ProtectedRoute allow={['operator', 'admin']}><AnalyticsPage /></ProtectedRoute>
@@ -75,6 +80,9 @@ export default function App() {
                   } />
                   <Route path="/admin/activity" element={
                     <ProtectedRoute allow={['admin']}><ActivityPage /></ProtectedRoute>
+                  } />
+                  <Route path="/admin/areas" element={
+                    <ProtectedRoute allow={['admin']}><AreasAdminPage /></ProtectedRoute>
                   } />
                   <Route path="/admin/settings" element={
                     <ProtectedRoute allow={['admin']}><SettingsPage /></ProtectedRoute>

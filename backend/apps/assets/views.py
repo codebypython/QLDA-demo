@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from django.db.models import Count
 from django.http import HttpResponse
 from .models import Asset
-from .serializers import AssetSerializer, AssetCreateSerializer
+from .serializers import AssetSerializer, AssetCreateSerializer, AssetUpdateSerializer
 from apps.users.permissions import ReadOnlyOrOperator
 from apps.audit.models import ActivityLog
 
@@ -46,6 +46,8 @@ class AssetViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == 'create':
             return AssetCreateSerializer
+        if self.action in ('update', 'partial_update'):
+            return AssetUpdateSerializer
         return AssetSerializer
 
     def perform_create(self, serializer):
@@ -95,7 +97,7 @@ class AssetViewSet(viewsets.ModelViewSet):
         )
         return Response({'total': total, 'by_type': by_type, 'by_status': by_status})
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='actions/export-csv')
     def export(self, request):
         fmt = request.query_params.get('format', 'csv')
         qs = self.get_queryset()

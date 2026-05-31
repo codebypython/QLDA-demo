@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents, LayersControl, LayerGroup } from 'react-leaflet';
+import { useEffect, useState } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents, LayerGroup } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet.markercluster';
 import 'leaflet.markercluster/dist/MarkerCluster.css';
 import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 import 'leaflet.heat';
+import MapViewController from './MapViewController';
 
 const ASSET_COLORS = {
   bench: '#3b82f6', trash_can: '#10b981', lamp: '#f59e0b',
@@ -30,6 +31,19 @@ function svgIcon(color, border, shape = 'circle') {
     iconAnchor: [14, 14],
     popupAnchor: [0, -14],
   });
+}
+
+function PickMarker({ pickMarker }) {
+  if (!pickMarker || pickMarker.latitude == null || pickMarker.longitude == null) return null;
+  const lat = +pickMarker.latitude;
+  const lng = +pickMarker.longitude;
+  if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+  const icon = svgIcon('#6366f1', '#fff', 'circle');
+  return (
+    <Marker position={[lat, lng]} icon={icon}>
+      <Popup>Điểm đã chọn</Popup>
+    </Marker>
+  );
 }
 
 function ClusterLayer({ assets, showAssets }) {
@@ -57,6 +71,27 @@ function ClusterLayer({ assets, showAssets }) {
     return () => { map.removeLayer(cluster); };
   }, [assets, showAssets, map]);
   return null;
+}
+
+function PointMarkersLayer({ markers }) {
+  if (!markers?.length) return null;
+  return (
+    <LayerGroup>
+      {markers.map((m) => {
+        if (m.latitude == null || m.longitude == null) return null;
+        const lat = +m.latitude;
+        const lng = +m.longitude;
+        if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+        const icon = svgIcon(m.color || '#a855f7', '#fff', 'circle');
+        const k = m.key != null ? String(m.key) : `${lat},${lng}`;
+        return (
+          <Marker key={k} position={[lat, lng]} icon={icon}>
+            {m.label ? <Popup>{m.label}</Popup> : <Popup>Tác vụ</Popup>}
+          </Marker>
+        );
+      })}
+    </LayerGroup>
+  );
 }
 
 function ReportLayer({ reports, showReports, onSelect }) {
@@ -121,18 +156,33 @@ export default function LeafletMap({
   assets = [], reports = [],
   onCoordPick, onReportSelect, onBboxChange,
   height = '100%',
+  /** [lat, lng] — cập nhật view khi đổi */
+  mapCenter = null,
+  mapZoom = null,
+  /** Hiện panel bật/tắt layer (tài sản, sự cố, heatmap) */
+  showLayerControls = true,
+  /** Marker cố định (ví dụ chế độ chọn vị trí) */
+  pickMarker = null,
+  /** Điểm bổ sung: [{ key, latitude, longitude, label?, color? }] */
+  pointMarkers = [],
 }) {
   const [showAssets, setShowAssets] = useState(true);
   const [showReports, setShowReports] = useState(true);
   const [showHeat, setShowHeat] = useState(false);
 
+  const initialCenter = mapCenter && mapCenter.length === 2 && mapCenter[0] != null && mapCenter[1] != null
+    ? [+mapCenter[0], +mapCenter[1]]
+    : DA_NANG_CENTER;
+  const initialZoom = mapZoom != null ? +mapZoom : 14;
+
   return (
     <div style={{ position: 'relative', height, width: '100%' }}>
       <MapContainer
-        center={DA_NANG_CENTER}
-        zoom={14}
+        center={initialCenter}
+        zoom={initialZoom}
         style={{ height: '100%', width: '100%', borderRadius: 'var(--radius)' }}
       >
+        <MapViewController center={mapCenter && mapCenter.length === 2 ? [+mapCenter[0], +mapCenter[1]] : null} zoom={mapZoom} />
         <TileLayer
           attribution='&copy; <a href="https://osm.org">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -140,10 +190,13 @@ export default function LeafletMap({
         <ClusterLayer assets={assets} showAssets={showAssets} />
         <ReportLayer reports={reports} showReports={showReports} onSelect={onReportSelect} />
         <HeatLayer assets={assets} showHeat={showHeat} />
+        <PointMarkersLayer markers={pointMarkers} />
+        <PickMarker pickMarker={pickMarker} />
         {onCoordPick && <ClickToCoord onClick={onCoordPick} />}
         {onBboxChange && <MoveBboxEmitter onBboxChange={onBboxChange} />}
       </MapContainer>
 
+      {showLayerControls && (
       <div className="map-controls" style={{
         position: 'absolute', top: 10, right: 10, zIndex: 1000,
         display: 'flex', flexDirection: 'column', gap: 6,
@@ -160,6 +213,7 @@ export default function LeafletMap({
           <input type="checkbox" checked={showHeat} onChange={(e) => setShowHeat(e.target.checked)} /> Heatmap
         </label>
       </div>
+      )}
     </div>
   );
 }

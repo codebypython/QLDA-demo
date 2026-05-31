@@ -6,11 +6,14 @@ class TaskSerializer(serializers.ModelSerializer):
     assigned_to_name = serializers.CharField(source='assigned_to.full_name', read_only=True, default='')
     created_by_name = serializers.CharField(source='created_by.full_name', read_only=True, default='')
     report_summary = serializers.SerializerMethodField()
+    asset_summary = serializers.SerializerMethodField()
 
     class Meta:
         model = Task
         fields = [
             'id', 'title', 'description', 'report', 'report_summary',
+            'related_asset', 'asset_summary',
+            'location_latitude', 'location_longitude',
             'assigned_to', 'assigned_to_name', 'created_by', 'created_by_name',
             'priority', 'status', 'due_date', 'completed_at',
             'completion_notes', 'completion_image', 'created_at', 'updated_at',
@@ -28,4 +31,17 @@ class TaskSerializer(serializers.ModelSerializer):
             'latitude': r.latitude,
             'longitude': r.longitude,
             'description': (r.description or '')[:120],
+        }
+
+    def get_asset_summary(self, obj):
+        if not obj.related_asset_id:
+            return None
+        a = obj.related_asset
+        return {
+            'id': str(a.id),
+            'name': a.name,
+            'asset_type': a.asset_type,
+            'asset_type_display': a.get_asset_type_display(),
+            'latitude': a.latitude,
+            'longitude': a.longitude,
         }

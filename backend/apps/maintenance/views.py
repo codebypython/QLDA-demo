@@ -8,6 +8,7 @@ from django.utils import timezone
 from .models import MaintenanceLog
 from .serializers import MaintenanceSerializer
 from apps.users.permissions import MaintenancePermission
+from apps.audit.models import ActivityLog
 
 
 class MaintenanceViewSet(viewsets.ModelViewSet):
@@ -17,6 +18,9 @@ class MaintenanceViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = MaintenanceLog.objects.select_related('asset', 'technician', 'report')
+        role = getattr(self.request.user, 'role', None)
+        if role == 'taskforce':
+            qs = qs.filter(technician=self.request.user)
         asset_id = self.request.query_params.get('asset')
         if asset_id:
             qs = qs.filter(asset_id=asset_id)
@@ -25,10 +29,31 @@ class MaintenanceViewSet(viewsets.ModelViewSet):
             qs = qs.filter(status=status_filter)
         return qs
 
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        ctx['request'] = self.request
+        return ctx
+
+    def perform_create(self, serializer):
+        role = getattr(self.request.user, 'role', None)
+        if role == 'taskforce':
+            log = serializer.save(technician=self.request.user)
+        else:
+            log = serializer.save()
+        ActivityLog.log(
+            self.request.user, 'maintenance.created', 'maintenance', log.id,
+            details={'asset': str(log.asset_id), 'status': log.status},
+        )
+
     def perform_update(self, serializer):
+        role = getattr(self.request.user, 'role', None)
         instance = serializer.save()
+        ActivityLog.log(
+            self.request.user, 'maintenance.updated', 'maintenance', instance.id,
+            details={'status': instance.status},
+        )
         # When marked completed, update asset's last_maintained_at + status
-        if instance.status == 'completed':
+        if instance.status == MaintenanceLog.Status.COMPLETED:
             instance.completed_at = instance.completed_at or timezone.now()
             asset = instance.asset
             asset.last_maintained_at = timezone.now().date()
@@ -37,7 +62,7 @@ class MaintenanceViewSet(viewsets.ModelViewSet):
             asset.save()
             instance.save(update_fields=['completed_at'])
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='actions/export-csv')
     def export(self, request):
         fmt = request.query_params.get('format', 'csv')
         qs = self.get_queryset()

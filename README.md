@@ -99,10 +99,25 @@ npm run dev
 - **Real YOLO**: `download_model.py`, endpoint `/classify_batch`, threshold qua env, FE confirm modal khi confidence thấp
 - **Admin User Management** `/admin/users`: CRUD + activate/deactivate + link xem hoạt động
 
+## Phân quyền RBAC — CRUD theo vai trò
+
+Ma trận ngắn gọn (xem permission classes trong `backend/apps/users/permissions.py`):
+
+| Thực thể | Citizen | Operator | TaskForce | Admin |
+|----------|---------|----------|-----------|-------|
+| Assets | R | CRUD | R | CRUD |
+| Reports | CRUD (chỉ bản ghi của mình; chỉnh/xóa khi `pending`) | CRUD + `update_status` | R (báo cáo có task gắn mình) | Giống operator |
+| Tasks | — | CRUD | R task của mình + `PATCH status` (open/assigned/in_progress) + `complete` | Giống operator |
+| Maintenance | — | CRUD + export CSV | CRUD giới hạn (`technician` cố định là user; chỉnh `notes`/`scheduled_at`/`status`; không export) | Giống operator |
+| Comments (trên report) | C; U/D bình luận của mình | Giống citizen + có thể D mọi bình luận | C; U/D bình luận của mình trên báo cáo liên quan task | Giống operator |
+| Areas | R | R (chỉ đọc) | R | CRUD (ghi dữ liệu ranh giới bbox) |
+
+Các endpoint export CSV: **`/actions/export-csv/`** (tránh trùng với `{id}` của router).
+
 ## API Endpoints (chính)
 
 | Method | Endpoint | Mô tả |
-|--------|----------|--------|
+|--------|----------|-------|
 | POST | `/api/v1/auth/login/` | Đăng nhập (JWT) |
 | POST | `/api/v1/auth/register/` | Đăng ký công dân |
 | GET/PATCH | `/api/v1/auth/profile/` | Hồ sơ |
@@ -111,24 +126,29 @@ npm run dev
 | GET/POST/PATCH/DELETE | `/api/v1/admin/users/` | CRUD user (admin) |
 | GET/POST | `/api/v1/assets/` | Tài sản |
 | GET | `/api/v1/assets/heatmap/` | Heatmap data |
-| GET | `/api/v1/assets/export/?format=csv` | Export CSV |
+| GET | `/api/v1/assets/actions/export-csv/?format=csv` | Export CSV |
 | GET/POST | `/api/v1/reports/` | Báo cáo |
-| PATCH | `/api/v1/reports/{id}/update_status/` | Đổi trạng thái + auto pipeline |
-| GET/POST | `/api/v1/reports/{id}/comments/` | Bình luận |
+| PATCH/DELETE | `/api/v1/reports/{id}/` | Citizen: chỉ báo cáo `pending` của mình; Operator: chỉnh nội dung |
+| PATCH | `/api/v1/reports/{id}/update_status/` | Đổi trạng thái + auto pipeline (operator/admin) |
+| GET/POST | `/api/v1/reports/{id}/comments/` | Liệt kê / tạo bình luận |
+| PATCH/DELETE | `/api/v1/reports/{id}/comments/{comment_id}/` | Sửa/xóa bình luận |
 | GET | `/api/v1/reports/{id}/timeline/` | Timeline (từ audit) |
 | GET | `/api/v1/reports/analytics/timeline/` | Số report theo bucket |
 | GET | `/api/v1/reports/analytics/response_time/` | Avg thời gian xử lý |
 | GET | `/api/v1/reports/analytics/hour_heatmap/` | Số report theo giờ |
 | GET | `/api/v1/reports/analytics/top_areas/` | Top khu vực |
 | GET | `/api/v1/reports/analytics/ai_accuracy/` | Phân bố confidence AI |
+| GET | `/api/v1/reports/actions/export-csv/` | Export CSV báo cáo |
 | GET/POST/PATCH | `/api/v1/tasks/` | Tác vụ (`?order=priority` cho priority queue) |
 | PATCH | `/api/v1/tasks/{id}/complete/` | Hoàn thành (multipart: notes + completion_image) |
+| GET | `/api/v1/tasks/actions/export-csv/` | Export CSV tác vụ |
 | GET/POST/PATCH | `/api/v1/maintenance/` | Bảo trì |
+| GET | `/api/v1/maintenance/actions/export-csv/` | Export CSV (operator/admin) |
 | GET | `/api/v1/notifications/` | Thông báo của tôi |
 | PATCH | `/api/v1/notifications/{id}/read/` | Đánh dấu đã đọc |
 | GET | `/api/v1/notifications/unread_count/` | Số chưa đọc |
 | GET | `/api/v1/audit/` | Activity log (admin) |
-| GET/POST/PATCH/DELETE | `/api/v1/areas/` | Khu vực Đà Nẵng |
+| GET/POST/PATCH/DELETE | `/api/v1/areas/` | Khu vực (GET đã đăng nhập; ghi chỉ admin) |
 | GET/PATCH | `/api/v1/system/settings/` | System settings |
 | POST | `/classify` | AI phân loại 1 ảnh |
 | POST | `/classify_batch` | AI phân loại nhiều ảnh |

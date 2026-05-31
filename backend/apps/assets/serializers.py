@@ -41,3 +41,31 @@ class AssetCreateSerializer(serializers.ModelSerializer):
             validated_data['_latitude'] = lat
             validated_data['_longitude'] = lng
         return super().create(validated_data)
+
+
+class AssetUpdateSerializer(serializers.ModelSerializer):
+    latitude = serializers.FloatField(write_only=True, required=False, allow_null=True)
+    longitude = serializers.FloatField(write_only=True, required=False, allow_null=True)
+
+    class Meta:
+        model = Asset
+        fields = [
+            'name', 'asset_type', 'status', 'latitude', 'longitude',
+            'installed_at', 'metadata',
+        ]
+
+    def update(self, instance, validated_data):
+        import os
+        lat = validated_data.pop('latitude', None)
+        lng = validated_data.pop('longitude', None)
+        instance = super().update(instance, validated_data)
+        if lat is not None and lng is not None:
+            if os.environ.get('USE_POSTGIS', 'false').lower() == 'true':
+                from django.contrib.gis.geos import Point
+                instance.location = Point(lng, lat, srid=4326)
+                instance.save(update_fields=['location'])
+            else:
+                instance._latitude = lat
+                instance._longitude = lng
+                instance.save(update_fields=['_latitude', '_longitude'])
+        return instance

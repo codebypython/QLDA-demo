@@ -4,6 +4,7 @@ import {
   LayoutDashboard, Map, Package, AlertTriangle,
   ClipboardList, LogOut, Shield, Wrench, BarChart3,
   Users, Activity, Settings, User as UserIcon,
+  MapPinned,
 } from 'lucide-react';
 import NotificationBell from './NotificationBell';
 
@@ -13,8 +14,9 @@ const ALL_NAV_ITEMS = [
   { to: '/assets', icon: Package, label: 'Tài sản hạ tầng', section: 'quản lý', roles: ['operator', 'admin'] },
   { to: '/reports', icon: AlertTriangle, label: 'Báo cáo sự cố', section: 'quản lý', roles: ['citizen', 'operator', 'taskforce', 'admin'] },
   { to: '/tasks', icon: ClipboardList, label: 'Tác vụ', section: 'quản lý', roles: ['operator', 'taskforce', 'admin'] },
-  { to: '/maintenance', icon: Wrench, label: 'Bảo trì', section: 'quản lý', roles: ['operator', 'admin'] },
+  { to: '/maintenance', icon: Wrench, label: 'Bảo trì', section: 'quản lý', roles: ['operator', 'taskforce', 'admin'] },
   { to: '/analytics', icon: BarChart3, label: 'Phân tích', section: 'quản lý', roles: ['operator', 'admin'] },
+  { to: '/admin/areas', icon: MapPinned, label: 'Khu vực', section: 'quản trị', roles: ['admin'] },
   { to: '/admin/users', icon: Users, label: 'Người dùng', section: 'quản trị', roles: ['admin'] },
   { to: '/admin/activity', icon: Activity, label: 'Hoạt động', section: 'quản trị', roles: ['admin'] },
   { to: '/admin/settings', icon: Settings, label: 'Cài đặt', section: 'quản trị', roles: ['admin'] },

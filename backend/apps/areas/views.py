@@ -1,10 +1,10 @@
 from rest_framework import viewsets
 from .models import Area
 from .serializers import AreaSerializer
-from apps.users.permissions import ReadOnlyOrOperator
+from apps.users.permissions import ReadOnlyAuthenticatedOrAdminWrite
 
 
 class AreaViewSet(viewsets.ModelViewSet):
     queryset = Area.objects.all()
     serializer_class = AreaSerializer
-    permission_classes = [ReadOnlyOrOperator]
+    permission_classes = [ReadOnlyAuthenticatedOrAdminWrite]

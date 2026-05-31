@@ -11,3 +11,9 @@ class CommentSerializer(serializers.ModelSerializer):
         model = Comment
         fields = ['id', 'report', 'author', 'author_email', 'author_name', 'author_role', 'body', 'created_at']
         read_only_fields = ['id', 'report', 'author', 'created_at']
+
+
+class CommentPatchSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Comment
+        fields = ['body']

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { usersAPI } from '../../services/api';
+import { usersAPI, getErrorMessage } from '../../services/api';
+import ConfirmActionModal from '../../components/common/ConfirmActionModal';
 import { Plus, Trash2, Power, PowerOff, Activity } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -17,6 +18,7 @@ export default function UsersAdminPage() {
   const [form, setForm] = useState({
     email: '', username: '', full_name: '', role: 'citizen', password: '',
   });
+  const [deleteId, setDeleteId] = useState(null);
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -24,7 +26,9 @@ export default function UsersAdminPage() {
       const params = roleFilter ? { role: roleFilter } : {};
       const { data } = await usersAPI.adminList(params);
       setUsers(data.results || data);
-    } catch { toast.error('Lỗi tải danh sách'); }
+    } catch (err) {
+      console.warn('Không thể tải danh sách người dùng:', err);
+    }
     setLoading(false);
   };
 
@@ -39,8 +43,7 @@ export default function UsersAdminPage() {
       setForm({ email: '', username: '', full_name: '', role: 'citizen', password: '' });
       fetchUsers();
     } catch (err) {
-      const data = err.response?.data || {};
-      toast.error(Object.values(data).flat().join(', ') || 'Lỗi');
+      toast.error('Lỗi tạo user: ' + getErrorMessage(err));
     }
   };
 
@@ -49,15 +52,24 @@ export default function UsersAdminPage() {
       if (u.is_active) await usersAPI.deactivate(u.id);
       else await usersAPI.activate(u.id);
       fetchUsers();
-    } catch { toast.error('Lỗi'); }
+    } catch (err) {
+      toast.error('Lỗi chuyển đổi trạng thái: ' + getErrorMessage(err));
+    }
   };
 
-  const handleDelete = async (id) => {
-    if (!confirm('Xóa user này?')) return;
+  const handleDelete = (id) => {
+    setDeleteId(id);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteId) return;
     try {
-      await usersAPI.adminDelete(id);
+      await usersAPI.adminDelete(deleteId);
+      toast.success('Xóa người dùng thành công');
       fetchUsers();
-    } catch { toast.error('Lỗi'); }
+    } catch (err) {
+      toast.error('Lỗi xóa người dùng: ' + getErrorMessage(err));
+    }
   };
 
   return (
@@ -158,6 +170,16 @@ export default function UsersAdminPage() {
           </table>
         </div>
       </div>
+      <ConfirmActionModal
+        open={!!deleteId}
+        onClose={() => setDeleteId(null)}
+        onConfirm={handleDeleteConfirm}
+        title="Xác nhận xóa người dùng"
+        description="Bạn có chắc chắn muốn xóa người dùng này khỏi hệ thống? Hành động này sẽ thực hiện hard delete và không thể hoàn tác."
+        confirmLabel="Xóa người dùng"
+        cancelLabel="Hủy"
+        variant="danger"
+      />
     </div>
   );
 }

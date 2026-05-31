@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, CheckCheck } from 'lucide-react';
 import { notificationsAPI } from '../../services/api';
-import { useAuthStore } from '../../store';
+import { useAuthStore, useSettingsStore } from '../../store';
 
 export default function NotificationBell() {
   const isAuth = useAuthStore((s) => s.isAuthenticated);
@@ -12,6 +12,8 @@ export default function NotificationBell() {
   const navigate = useNavigate();
   const ref = useRef(null);
 
+  const { settings } = useSettingsStore();
+
   const fetchAll = async () => {
     try {
       const [{ data: list }, { data: cnt }] = await Promise.all([
@@ -20,15 +22,18 @@ export default function NotificationBell() {
       ]);
       setItems((list.results || list).slice(0, 10));
       setUnread(cnt.unread || 0);
-    } catch { /* ignore */ }
+    } catch (err) {
+      console.warn('Không thể tải danh sách thông báo:', err);
+    }
   };
 
   useEffect(() => {
     if (!isAuth) return;
     fetchAll();
-    const id = setInterval(fetchAll, 30000);
+    const pollingMs = (settings.notification_polling_seconds ?? 30) * 1000;
+    const id = setInterval(fetchAll, pollingMs);
     return () => clearInterval(id);
-  }, [isAuth]);
+  }, [isAuth, settings.notification_polling_seconds]);
 
   useEffect(() => {
     const handler = (e) => {

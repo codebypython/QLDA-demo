@@ -16,7 +16,7 @@ class TaskViewSet(viewsets.ModelViewSet):
     permission_classes = [TaskPermission]
 
     def get_queryset(self):
-        qs = Task.objects.select_related('assigned_to', 'created_by', 'report')
+        qs = Task.objects.select_related('assigned_to', 'created_by', 'report', 'related_asset')
         user = self.request.user
         role = getattr(user, 'role', None)
         if role == 'taskforce':
@@ -37,6 +37,47 @@ class TaskViewSet(viewsets.ModelViewSet):
                 )
             ).order_by('_priority_rank', '-created_at')
         return qs
+
+    def partial_update(self, request, *args, **kwargs):
+        role = getattr(request.user, 'role', None)
+        if role == 'taskforce':
+            task = self.get_object()
+            if task.status == Task.Status.COMPLETED:
+                return Response({'detail': 'Task đã hoàn thành.'}, status=status.HTTP_400_BAD_REQUEST)
+            extra = set(request.data.keys()) - {'status'}
+            if extra:
+                return Response(
+                    {'detail': 'Chỉ được cập nhật trường status.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            new_status = request.data.get('status', task.status)
+            if new_status == Task.Status.COMPLETED:
+                return Response(
+                    {'detail': 'Dùng hành động complete để hoàn thành kèm ảnh/ghi chú.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if new_status not in dict(Task.Status.choices):
+                return Response({'detail': 'status không hợp lệ'}, status=status.HTTP_400_BAD_REQUEST)
+            if new_status == task.status:
+                return Response(TaskSerializer(task).data)
+            valid = {
+                (Task.Status.OPEN, Task.Status.ASSIGNED),
+                (Task.Status.OPEN, Task.Status.IN_PROGRESS),
+                (Task.Status.ASSIGNED, Task.Status.OPEN),
+                (Task.Status.ASSIGNED, Task.Status.IN_PROGRESS),
+                (Task.Status.IN_PROGRESS, Task.Status.ASSIGNED),
+                (Task.Status.IN_PROGRESS, Task.Status.OPEN),
+            }
+            if (task.status, new_status) not in valid:
+                return Response({'detail': 'Chuyển trạng thái không được phép.'}, status=status.HTTP_400_BAD_REQUEST)
+            task.status = new_status
+            task.save(update_fields=['status', 'updated_at'])
+            ActivityLog.log(
+                request.user, 'task.updated', 'task', task.id,
+                details={'status': task.status},
+            )
+            return Response(TaskSerializer(task).data)
+        return super().partial_update(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         task = serializer.save(created_by=self.request.user)
@@ -84,7 +125,7 @@ class TaskViewSet(viewsets.ModelViewSet):
                 )
         return Response(TaskSerializer(task).data)
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='actions/export-csv')
     def export(self, request):
         fmt = request.query_params.get('format', 'csv')
         qs = self.get_queryset()
