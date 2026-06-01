@@ -19,7 +19,8 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res,
   async (error) => {
-    if (error.response?.status === 401 && !error.config._retry) {
+    const isAuthRequest = error.config?.url?.includes('/auth/login') || error.config?.url?.includes('/auth/register');
+    if (error.response?.status === 401 && !error.config?._retry && !isAuthRequest) {
       error.config._retry = true;
       const refresh = localStorage.getItem('refresh_token');
       if (refresh) {
@@ -31,16 +32,18 @@ api.interceptors.response.use(
           }
           error.config.headers.Authorization = `Bearer ${data.access}`;
           return api(error.config);
-        } catch {
+        } catch (err) {
           localStorage.removeItem('access_token');
           localStorage.removeItem('refresh_token');
           window.location.href = '/login';
+          return Promise.reject(err);
         }
       }
     }
     return Promise.reject(error);
   }
 );
+
 
 const buildExportUrl = (resource, params = {}) => {
   const usp = new URLSearchParams(params);

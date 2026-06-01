@@ -387,6 +387,22 @@ body {
   resize: vertical;
 }
 
+.form-input.is-invalid, .form-select.is-invalid, .form-textarea.is-invalid {
+  border-color: var(--accent-red) !important;
+}
+
+.form-input.is-invalid:focus, .form-select.is-invalid:focus, .form-textarea.is-invalid:focus {
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15) !important;
+}
+
+.error-message {
+  color: var(--accent-red);
+  font-size: 12px;
+  margin-top: 4px;
+  display: block;
+}
+
+
 /* === Badge === */
 .badge {
   display: inline-flex;
