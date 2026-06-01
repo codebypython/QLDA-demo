@@ -1,5 +1,6 @@
+import { useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { useAuthStore } from '../../store';
+import { useAuthStore, useSettingsStore } from '../../store';
 import {
   LayoutDashboard, Map, Package, AlertTriangle,
   ClipboardList, LogOut, Shield, Wrench, BarChart3,
@@ -26,13 +27,18 @@ const ALL_NAV_ITEMS = [
 
 export default function Layout({ children }) {
   const { user, logout } = useAuthStore();
+  const { settings, fetchSettings } = useSettingsStore();
   const location = useLocation();
+
+  useEffect(() => {
+    fetchSettings();
+  }, [fetchSettings]);
 
   const role = user?.role || 'citizen';
   const navItems = ALL_NAV_ITEMS.filter((n) => n.roles.includes(role));
 
   const pageTitle = navItems.find((n) => n.to === location.pathname)?.label
-    || (location.pathname.startsWith('/reports/') ? 'Chi tiết báo cáo' : 'InfraWatch');
+    || (location.pathname.startsWith('/reports/') ? 'Chi tiết báo cáo' : (settings.system_name || 'InfraWatch'));
 
   let lastSection = '';
 
@@ -42,11 +48,19 @@ export default function Layout({ children }) {
         <div className="sidebar-header">
           <div className="sidebar-logo">
             <div className="sidebar-logo-icon">
-              <Shield size={22} color="white" />
+              {settings.logo_url ? (
+                <img 
+                  src={getDirectImageURL(settings.logo_url)} 
+                  alt="Logo" 
+                  style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--radius-sm)' }} 
+                />
+              ) : (
+                <Shield size={22} color="white" />
+              )}
             </div>
             <div>
-              <h1>InfraWatch</h1>
-              <p>Quản lý Hạ tầng — Đà Nẵng</p>
+              <h1>{settings.system_name || 'InfraWatch'}</h1>
+              <p>{getSystemSubtitle(settings.system_name)}</p>
             </div>
           </div>
         </div>
@@ -113,3 +127,26 @@ export default function Layout({ children }) {
     </div>
   );
 }
+
+// Layout helper utilities for dynamic branding
+const getDirectImageURL = (url) => {
+  if (!url) return '';
+  
+  // Auto-convert Google Drive sharing links to direct download/image streams
+  const driveRegex = /drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/;
+  const match = url.match(driveRegex);
+  if (match && match[1]) {
+    return `https://drive.google.com/uc?export=download&id=${match[1]}`;
+  }
+  
+  return url;
+};
+
+const getSystemSubtitle = (systemName) => {
+  const name = systemName || 'InfraWatch';
+  // If the name already has a hyphen or em-dash, prevent double location display
+  if (name.includes('—') || name.includes('-') || name.includes('|')) {
+    return 'Quản lý Hạ tầng';
+  }
+  return 'Quản lý Hạ tầng — Đà Nẵng';
+};
